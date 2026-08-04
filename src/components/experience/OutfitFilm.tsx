@@ -3,21 +3,22 @@
 import { useScroll } from "motion/react";
 import Image from "next/image";
 import { useEffect, useRef } from "react";
+import { LightPlate } from "@/components/experience/Spotlight";
 import { AddToBag } from "@/components/product/AddToBag";
-import { Spotlight } from "@/components/experience/Spotlight";
 import { Overline } from "@/components/ui/Overline";
 import type { Product } from "@/lib/commerce";
 import { formatMoney } from "@/lib/commerce";
 import { millionaireSetTurnaroundCutout } from "@/lib/media/assets";
+import { approach, curve, damper, MAX_STEP, smoothDamp } from "@/lib/motion/film";
 import { useMotionPreference } from "@/lib/motion/useMotionPreference";
 
 /**
  * Scroll timeline, in progress units across the whole film.
  *
  * Written as one table because every element is choreographed against the same
- * clock — the wordmark, the figure's position, its rotation and four blocks of
- * type all read from these numbers. Scattering the ranges through the markup
- * is how a sequence like this drifts out of sync.
+ * clock — the wordmark, the figure's position, its rotation, the lighting and
+ * four blocks of type all read from these numbers. Scattering the ranges
+ * through the markup is how a sequence like this drifts out of sync.
  */
 const T = {
   wordHold: 0.06,
@@ -32,15 +33,25 @@ const T = {
   buy: 0.82,
 } as const;
 
-/** Camera angle the garment holds during each chapter. */
-const ANGLE_STOPS: readonly [number, number][] = [
+/**
+ * Camera angle the garment holds during each chapter.
+ *
+ * Run through the same monotone curve as everything else, so the turn carries
+ * its speed *through* each chapter instead of restarting there. Interpolating
+ * these linearly — the obvious way — left a corner in angular velocity at every
+ * stop: the object visibly changed pace at four points in the revolution, which
+ * is the single clearest tell that a rotation is a scrubbed value rather than
+ * an object with mass.
+ */
+const ANGLE = curve([
   [T.morphEnd, 0],
   [T.ch1, 35],
   [T.ch2, 90],
   [T.ch3, 180],
   [T.buy, 360],
-];
+]);
 
+const DEG = Math.PI / 180;
 const normalise = (a: number) => ((a % 360) + 360) % 360;
 const BLEND_START = 0.34;
 const BLEND_END = 0.66;
@@ -109,86 +120,150 @@ export function OutfitFilm({ product }: { product: Product }) {
 }
 
 /**
- * Piecewise-linear interpolation across a table of [input, output] stops,
- * clamped at both ends.
- *
- * Everything on the stage is driven through this rather than through
- * `useTransform`. That is a deliberate correction: motion's transform writes
- * (`scale`, `translateX`) update correctly here, but its `opacity` and
- * `filter` values were measured frozen at their initial output at every scroll
- * position — so the wordmark never dissolved and the garment never appeared.
- * Driving all of it from the same rAF loop that already paints the frame stack
- * removes the split entirely: one clock, one write path, nothing to get out of
- * step.
- */
-function stopsAt(p: number, stops: readonly (readonly [number, number])[]): number {
-  const first = stops[0]!;
-  const last = stops[stops.length - 1]!;
-  if (p <= first[0]) return first[1];
-  if (p >= last[0]) return last[1];
-  for (let i = 1; i < stops.length; i++) {
-    const [pa, va] = stops[i - 1]!;
-    const [pb, vb] = stops[i]!;
-    if (p <= pb) {
-      // Smoothstep between stops rather than a straight line. Linear
-      // interpolation gives every stop a visible corner — the eye reads the
-      // exact frame a value starts and stops changing, which is what makes a
-      // scroll timeline feel mechanical. Easing each segment in and out means
-      // nothing on the stage ever begins or ends abruptly.
-      const t = (p - pa) / (pb - pa);
-      return va + t * t * (3 - 2 * t) * (vb - va);
-    }
-  }
-  return last[1];
-}
-
-/**
- * How quickly the film catches up to the scrollbar.
+ * How long the film takes to arrive at the scroll position, in seconds.
  *
  * The single most important number here. Reading scroll position directly
  * couples the garment rigidly to the wheel, so every notch of a mouse wheel
- * lands as a discrete step. Chasing the target instead gives the whole stage
- * inertia — it arrives a beat after the input and settles rather than stops,
- * which is what makes the sequence read as a camera move instead of a
- * scrubbed timeline. Lower is heavier.
+ * lands as a discrete step. Following it through a critically damped spring
+ * instead gives the whole stage inertia — it arrives a beat after the input and
+ * *coasts to a stop* rather than halting, because the follower carries a
+ * velocity across frames. That carried momentum is what makes the sequence read
+ * as a camera move instead of a scrubbed timeline. Higher is heavier.
  */
-const FILM_LERP = 0.075;
+const FILM_SETTLE = 0.28;
+
+/** Lag on the pointer-driven camera. Slower than the cursor, faster than light. */
+const CAMERA_HALF_LIFE = 0.25;
 
 /** Degrees of Y-rotation applied per degree of turn away from camera. */
 const ROTATION_DEPTH = 0.55;
 
-const WORD_OPACITY = [
+/** How far a frame recedes, in px, per degree it is turned away from camera. */
+const FRAME_DEPTH = 1.5;
+
+/* --- The stage ----------------------------------------------------------- */
+
+const WORD_OPACITY = curve([
   [0, 1],
   [T.wordHold, 1],
   [T.morphEnd - 0.02, 0],
-] as const;
-const WORD_SCALE = [
+]);
+const WORD_SCALE = curve([
   [0, 1],
   [T.morphStart, 1],
   [T.morphEnd, 1.28],
-] as const;
-const WORD_BLUR = [
+]);
+const WORD_BLUR = curve([
   [T.morphStart, 0],
   [T.morphEnd, 9],
-] as const;
-const FIG_OPACITY = [
+]);
+
+/**
+ * The figure dissolves out again at the very end.
+ *
+ * Not decoration: the film is followed by another section, and a sticky stage
+ * that simply stops being sticky hands over with a hard edge — the shot is
+ * still full of product one pixel before the page starts scrolling normally
+ * again. Letting the garment recede and dim over the last stretch means the
+ * frame has already emptied by the time the stage releases, so there is nothing
+ * left to cut away from.
+ */
+const FIG_OPACITY = curve([
   [T.morphStart, 0],
   [T.morphEnd, 1],
-] as const;
-const FIG_X = [
+  [T.buy, 1],
+  [0.94, 0.72],
+  [1, 0.28],
+]);
+const FIG_X = curve([
   [T.morphEnd, 0],
   [T.ch1, 24],
   [T.ch1End, 24],
   [T.ch2, -24],
   [T.ch2End, -24],
   [T.ch3, 0],
-] as const;
-const FIG_SCALE = [
+]);
+const FIG_SCALE = curve([
   [T.morphStart, 0.9],
   [T.morphEnd, 1],
   [T.ch3End, 1],
   [T.buy, 1.05],
-] as const;
+  [1, 1.13],
+]);
+
+/**
+ * Rack focus.
+ *
+ * The garment arrives out of focus and pulls sharp exactly as the wordmark
+ * blurs away — the two halves of one focus pull rather than a crossfade between
+ * two flat images. It is the oldest way a camera says *look here now*, and it
+ * costs one filter on one element.
+ */
+const FIG_DEFOCUS = curve([
+  [T.morphStart, 7],
+  [T.morphEnd, 0],
+]);
+
+/**
+ * The camera itself: a slow dolly in, and a lens that never quite settles.
+ *
+ * The opening is framed marginally wide and eases in as the wordmark holds, so
+ * the very first thing the page does is move — but so slowly that it registers
+ * as presence rather than as an animation. The push resumes through the
+ * purchase, closing on the product.
+ */
+const DOLLY = curve([
+  [0, 1.05],
+  [T.morphEnd, 1],
+  [T.ch3End, 1.015],
+  [T.buy, 1.035],
+  [1, 1.07],
+]);
+
+/* --- Lighting ------------------------------------------------------------ */
+
+/**
+ * The key light is brought up as the garment appears, holds through the first
+ * two chapters, drops as the figure turns its back, and lifts again for the
+ * purchase. A room whose lighting never changes is a photograph; one whose
+ * lighting evolves with the shot is a film.
+ */
+const KEY_OPACITY = curve([
+  [0, 0.34],
+  [T.morphStart, 0.52],
+  [T.morphEnd, 1],
+  [T.ch2, 1],
+  [T.ch3, 0.76],
+  [T.buy, 1],
+  [0.94, 0.6],
+  [1, 0.18],
+]);
+const KEY_SCALE = curve([
+  [0, 0.82],
+  [T.morphEnd, 1],
+  [T.ch2, 1.06],
+  [T.ch3, 0.93],
+  [T.buy, 1.08],
+  [1, 1.16],
+]);
+
+/**
+ * The rim only exists while the garment is turned away from square.
+ *
+ * Its position is driven by the *angle*, not by progress: the highlight swings
+ * around the body as the object rotates, which is the cue that sells a turn as
+ * a turn. At the front and back views it fades out entirely — a rim light on a
+ * face-on subject is just a glow.
+ */
+const RIM_GATE = curve([
+  [T.morphStart, 0],
+  [T.morphEnd, 1],
+  [T.buy, 1],
+  [0.92, 0.35],
+  [1, 0],
+]);
+
+/* --- Copy ---------------------------------------------------------------- */
 
 /**
  * In, hold, out — one row per chapter, in the order they appear.
@@ -201,7 +276,8 @@ const FIG_SCALE = [
  * did the same thing.
  *
  * A held beat of nothing is also better cinema than a crossfade. The garment
- * carries the cut on its own.
+ * carries the cut on its own — and now that the turn never pauses and the light
+ * keeps moving, the beat between chapters is a held shot rather than a gap.
  */
 const PANEL_RANGES: readonly (readonly [number, number, number, number])[] = [
   [0.2, 0.26, 0.34, 0.39],
@@ -209,18 +285,41 @@ const PANEL_RANGES: readonly (readonly [number, number, number, number])[] = [
   [0.6, 0.66, 0.7, 0.755],
 ];
 
+// Compiled once. Building these inside the loop allocated three arrays per
+// frame for the garbage collector to sweep up during the one animation on the
+// page that cannot afford a pause.
+const PANEL_OPACITY = PANEL_RANGES.map(([inStart, inEnd, outStart, outEnd]) =>
+  curve([
+    [inStart, 0],
+    [inEnd, 1],
+    [outStart, 1],
+    [outEnd, 0],
+  ]),
+);
+const PANEL_Y = PANEL_RANGES.map(([inStart, inEnd, outStart, outEnd]) =>
+  curve([
+    [inStart, 26],
+    [inEnd, 0],
+    [outStart, 0],
+    [outEnd, -14],
+  ]),
+);
+
 /** The purchase panel arrives only once Chapter III has left the frame. */
-const BUY_OPACITY = [
+const BUY_OPACITY = curve([
   [0.78, 0],
   [0.86, 1],
-] as const;
-const BUY_Y = [
+]);
+const BUY_Y = curve([
   [0.78, 30],
   [0.86, 0],
-] as const;
+]);
 
 function FilmLive({ product }: { product: Product }) {
   const sectionRef = useRef<HTMLElement>(null);
+  const cameraRef = useRef<HTMLDivElement>(null);
+  const keyLightRef = useRef<HTMLDivElement>(null);
+  const rimLightRef = useRef<HTMLDivElement>(null);
   const frameRefs = useRef<(HTMLDivElement | null)[]>([]);
   const wordRef = useRef<HTMLDivElement>(null);
   const figureRef = useRef<HTMLDivElement>(null);
@@ -237,15 +336,30 @@ function FilmLive({ product }: { product: Product }) {
    *
    * Direct style writes rather than React state — at sixty frames a second a
    * re-render per frame would be the most expensive thing on the page.
+   *
+   * Everything is driven from here rather than through `useTransform`. That is
+   * a deliberate correction, not a preference: motion's transform writes
+   * (`scale`, `translateX`) update correctly, but its `opacity` and `filter`
+   * values were measured frozen at their initial output at every scroll
+   * position — so the wordmark never dissolved and the garment never appeared.
+   * One clock, one write path, nothing to get out of step.
    */
   useEffect(() => {
     const frames = millionaireSetTurnaroundCutout.frames;
     let raf = 0;
-    // Lagging copy of the scroll position, and a lagging copy of the pointer.
-    let smoothed = scrollYProgress.get();
+
+    // Lagging copy of the scroll position, with a velocity it carries between
+    // frames, and a lagging copy of the pointer.
+    let progress = scrollYProgress.get();
+    const scrollDamper = damper();
     const camera = { x: 0, y: 0, tx: 0, ty: 0 };
 
-    const reduced = window.matchMedia("(pointer: coarse)").matches;
+    let previousAngle = ANGLE(progress);
+    let turnSpeed = 0;
+    let appliedBlur = -1;
+    const frameOpacity = new Array<number>(frames.length).fill(-1);
+
+    const coarse = window.matchMedia("(pointer: coarse)").matches;
     const onPointerMove = (event: PointerEvent) => {
       // Camera drift is deliberately tiny — a couple of percent of the
       // viewport. Enough that the frame feels hand-held rather than locked
@@ -253,67 +367,144 @@ function FilmLive({ product }: { product: Product }) {
       camera.tx = (event.clientX / window.innerWidth - 0.5) * 2;
       camera.ty = (event.clientY / window.innerHeight - 0.5) * 2;
     };
-    if (!reduced)
-      window.addEventListener("pointermove", onPointerMove, { passive: true });
+    if (!coarse) window.addEventListener("pointermove", onPointerMove, { passive: true });
 
-    const angleAt = (p: number) => {
-      if (p <= ANGLE_STOPS[0]![0]) return ANGLE_STOPS[0]![1];
-      for (let i = 1; i < ANGLE_STOPS.length; i++) {
-        const [pa, aa] = ANGLE_STOPS[i - 1]!;
-        const [pb, ab] = ANGLE_STOPS[i]!;
-        if (p <= pb) return aa + ((p - pa) / (pb - pa)) * (ab - aa);
-      }
-      return ANGLE_STOPS[ANGLE_STOPS.length - 1]![1];
-    };
+    let last = performance.now();
 
-    const tick = () => {
+    const tick = (now: number) => {
+      // Clamped, so a tab returning from the background integrates one ordinary
+      // step and eases in rather than lurching a second's worth of film.
+      const dt = Math.min((now - last) / 1000, MAX_STEP);
+      last = now;
+      const time = now / 1000;
+
       // Everything downstream reads the eased value, never the raw one.
-      smoothed += (scrollYProgress.get() - smoothed) * FILM_LERP;
-      camera.x += (camera.tx - camera.x) * 0.045;
-      camera.y += (camera.ty - camera.y) * 0.045;
-      const p = smoothed;
+      progress = smoothDamp(
+        progress,
+        scrollYProgress.get(),
+        scrollDamper,
+        FILM_SETTLE,
+        dt,
+      );
+      camera.x = approach(camera.x, camera.tx, CAMERA_HALF_LIFE, dt);
+      camera.y = approach(camera.y, camera.ty, CAMERA_HALF_LIFE, dt);
+      const p = progress;
+
+      /*
+         Breath.
+
+         Two pairs of sine waves at incommensurate periods — around 30 and 48
+         seconds — so the drift never visibly repeats and never arrives
+         anywhere. Amplitude is a third of a percent of the viewport, which is
+         three or four pixels: far below the threshold at which anyone could
+         say what moved, and far above nothing at all. It is the difference
+         between a held shot and a paused one, and it is the only motion on the
+         stage that does not require the viewer to scroll.
+      */
+      const breathX = Math.sin(time * 0.21) * 0.26 + Math.sin(time * 0.13 + 1.7) * 0.15;
+      const breathY =
+        Math.cos(time * 0.17 + 0.6) * 0.2 + Math.sin(time * 0.29 + 0.4) * 0.09;
+      const breathTilt = Math.sin(time * 0.19 + 2.1) * 0.22;
+
+      if (cameraRef.current) {
+        cameraRef.current.style.transform = `translate3d(${breathX.toFixed(3)}%, ${breathY.toFixed(3)}%, 0) scale(${DOLLY(p).toFixed(4)})`;
+      }
+
+      // The turn, and how fast it is turning. Unwrapped, so the wrap from 359°
+      // back to 0° cannot register as a thousand degrees a second of speed.
+      const turned = ANGLE(p);
+      turnSpeed = approach(
+        turnSpeed,
+        Math.abs(turned - previousAngle) / Math.max(dt, 1e-4),
+        0.1,
+        dt,
+      );
+      previousAngle = turned;
+      const angle = normalise(turned);
+      const sinAngle = Math.sin(angle * DEG);
+
+      const figX = FIG_X(p);
+
+      if (keyLightRef.current) {
+        // The fixture follows the figure across the frame, but only part of the
+        // way and a beat behind — a light on a stand is not welded to its
+        // subject.
+        keyLightRef.current.style.opacity = KEY_OPACITY(p).toFixed(3);
+        keyLightRef.current.style.transform = `translate3d(${(figX * 0.9 + camera.x * 0.5 + breathX * 2).toFixed(2)}%, ${(camera.y * 0.35 + breathY * 2).toFixed(2)}%, 0) scale(${KEY_SCALE(p).toFixed(4)})`;
+      }
+
+      if (rimLightRef.current) {
+        rimLightRef.current.style.opacity = (
+          RIM_GATE(p) *
+          (0.22 + 0.78 * Math.abs(sinAngle))
+        ).toFixed(3);
+        rimLightRef.current.style.transform = `translate3d(${(figX * 0.8 + sinAngle * 30).toFixed(2)}%, ${(camera.y * 0.2 - 4).toFixed(2)}%, 0)`;
+      }
 
       if (wordRef.current) {
-        wordRef.current.style.opacity = stopsAt(p, WORD_OPACITY).toFixed(3);
+        wordRef.current.style.opacity = WORD_OPACITY(p).toFixed(3);
         // The wordmark takes the camera at half strength, the figure at full —
         // the difference is what separates them in depth during the morph.
-        wordRef.current.style.transform = `translate3d(${(camera.x * 0.6).toFixed(2)}%, ${(camera.y * 0.4).toFixed(2)}%, 0) scale(${stopsAt(p, WORD_SCALE).toFixed(4)})`;
-        wordRef.current.style.filter = `blur(${stopsAt(p, WORD_BLUR).toFixed(2)}px)`;
+        wordRef.current.style.transform = `translate3d(${(camera.x * 0.6).toFixed(2)}%, ${(camera.y * 0.4).toFixed(2)}%, 0) scale(${WORD_SCALE(p).toFixed(4)})`;
+        wordRef.current.style.filter = `blur(${WORD_BLUR(p).toFixed(2)}px)`;
       }
 
       if (figureRef.current) {
-        figureRef.current.style.opacity = stopsAt(p, FIG_OPACITY).toFixed(3);
-        figureRef.current.style.transform = `translate3d(${(stopsAt(p, FIG_X) + camera.x * 1.1).toFixed(2)}%, ${(camera.y * 0.7).toFixed(2)}%, 0) scale(${stopsAt(p, FIG_SCALE).toFixed(4)})`;
+        /*
+           The pointer orbits the figure rather than sliding it.
+
+           A translate makes the object move across a flat plane; a rotation
+           about the vertical axis, inside the camera's perspective, makes the
+           viewer move around a solid one. Two and a half degrees is the whole
+           range — but because the frames inside are themselves turned in depth,
+           it is enough for the parallax between shoulder and hem to read.
+        */
+        const orbit = camera.x * 2.4 + breathTilt;
+        const pitch = -camera.y * 1.1;
+        figureRef.current.style.opacity = FIG_OPACITY(p).toFixed(3);
+        figureRef.current.style.transform = `translate3d(${(figX + camera.x * 1.1).toFixed(2)}%, ${(camera.y * 0.7).toFixed(2)}%, 0) rotateY(${orbit.toFixed(2)}deg) rotateX(${pitch.toFixed(2)}deg) scale(${FIG_SCALE(p).toFixed(4)})`;
+
+        /*
+           Depth of field, driven by how fast the object is actually turning.
+
+           A camera cannot resolve something moving quickly across its sensor,
+           and with only four shot angles the fastest part of the turn is
+           precisely where two frames are dissolving through each other. Softening
+           in proportion to angular speed does two jobs with one filter: it is
+           what real motion looks like, and it hides the double exposure that no
+           amount of crossfade tuning can remove. Stop scrolling and the image
+           settles back to sharp, exactly like focus catching up.
+
+           Quantised to a quarter pixel so the blur is re-rasterised only when
+           the bucket actually changes, and removed outright at zero rather than
+           left as `blur(0px)`, which still costs a filter pass.
+        */
+        const blur =
+          Math.round((FIG_DEFOCUS(p) + Math.min(2.2, turnSpeed * 0.011)) * 4) / 4;
+        if (blur !== appliedBlur) {
+          figureRef.current.style.filter = blur > 0 ? `blur(${blur}px)` : "";
+          appliedBlur = blur;
+        }
       }
 
-      // Chapter copy: fade up on arrival, hold, fade out as the next begins.
+      // Chapter copy: fade up on arrival, hold, drift out as the next begins.
       for (let i = 0; i < PANEL_RANGES.length; i++) {
         const el = panelRefs.current[i];
         if (!el) continue;
-        const [inStart, inEnd, outStart, outEnd] = PANEL_RANGES[i]!;
-        const o = stopsAt(p, [
-          [inStart, 0],
-          [inEnd, 1],
-          [outStart, 1],
-          [outEnd, 0],
-        ]);
-        el.style.opacity = o.toFixed(3);
-        el.style.transform = `translate3d(0,${stopsAt(p, [
-          [inStart, 26],
-          [inEnd, 0],
-        ]).toFixed(1)}px,0)`;
+        el.style.opacity = PANEL_OPACITY[i]!(p).toFixed(3);
+        // A sliver of the pointer camera, so the type occupies the same room as
+        // the garment rather than sitting on the glass in front of it.
+        el.style.transform = `translate3d(${(camera.x * 4).toFixed(2)}px,${PANEL_Y[i]!(p).toFixed(1)}px,0)`;
       }
 
       if (purchaseRef.current) {
-        const o = stopsAt(p, BUY_OPACITY);
+        const o = BUY_OPACITY(p);
         purchaseRef.current.style.opacity = o.toFixed(3);
-        purchaseRef.current.style.transform = `translate3d(0,${stopsAt(p, BUY_Y).toFixed(1)}px,0)`;
+        purchaseRef.current.style.transform = `translate3d(0,${BUY_Y(p).toFixed(1)}px,0)`;
         // Only clickable once it has actually arrived, so an invisible panel
         // can never intercept a click meant for the film behind it.
         purchaseRef.current.style.pointerEvents = o > 0.9 ? "auto" : "none";
       }
-
-      const angle = normalise(angleAt(p));
 
       for (let i = 0; i < frames.length; i++) {
         const frame = frames[i]!;
@@ -335,30 +526,46 @@ function FilmLive({ product }: { product: Product }) {
         );
         const opacity = 1 - ramp * ramp * (3 - 2 * ramp);
 
+        const el = frameRefs.current[i];
+        if (!el) continue;
+
+        if (opacity <= 0.001) {
+          // Nothing to see, so nothing to compute. Four of the six frames are
+          // invisible at any moment; writing transforms to them is work the
+          // compositor throws away.
+          if (frameOpacity[i] !== 0) {
+            el.style.opacity = "0";
+            frameOpacity[i] = 0;
+          }
+          continue;
+        }
+        frameOpacity[i] = opacity;
+
         /*
            Real rotation, not a slideshow.
 
            Each frame is turned about the vertical axis in proportion to how far
-           the camera has moved past it, inside a parent carrying perspective.
-           A frame being turned away from leans back and foreshortens exactly as
-           a solid object would, while the incoming frame swings in to meet it.
-           With the crossfade on top, the handover reads as one object rotating
-           rather than two photographs being exchanged — which is the whole
-           difference between this and a gallery.
+           the camera has moved past it, inside a parent carrying perspective,
+           and pushed back along Z by the same amount. A frame being turned away
+           from leans back, foreshortens *and recedes* exactly as a solid object
+           would, while the incoming frame swings forward to meet it. The depth
+           offset is what stops the handover reading as two photographs at
+           different opacities: they are no longer on the same plane, so the
+           perspective divide separates them the way it separates the near and
+           far side of any real object.
 
            Mirrored frames negate the rotation as well as the scale, or they
            would lean the wrong way.
         */
         const facing = frame.mirrored ? -1 : 1;
         const rotateY = Math.max(-40, Math.min(40, delta * ROTATION_DEPTH));
+        const depth = -Math.abs(delta) * FRAME_DEPTH;
         const shift = Math.max(-14, Math.min(14, -delta * 0.16));
 
-        const el = frameRefs.current[i];
-        if (el) {
-          el.style.opacity = opacity.toFixed(3);
-          el.style.transform = `translate3d(${shift.toFixed(1)}px,0,0) rotateY(${(rotateY * facing).toFixed(2)}deg) scaleX(${facing})`;
-        }
+        el.style.opacity = opacity.toFixed(3);
+        el.style.transform = `translate3d(${shift.toFixed(1)}px,0,${depth.toFixed(1)}px) rotateY(${(rotateY * facing).toFixed(2)}deg) scaleX(${facing})`;
       }
+
       raf = requestAnimationFrame(tick);
     };
 
@@ -377,7 +584,80 @@ function FilmLive({ product }: { product: Product }) {
       aria-label="The MILLIONAIRE hooded set"
     >
       <div className="sticky top-0 h-svh overflow-hidden">
-        <Spotlight className="top-[4%] left-1/2 h-[80svh] w-[80svh] -translate-x-1/2" />
+        {/*
+          The camera.
+
+          Perspective lives on this element rather than on the figure, so the
+          dolly, the breath and the figure's orbit are all resolved in one
+          projection — the lights, the wordmark and the garment share a single
+          space instead of each being transformed in its own flat one.
+
+          Type is deliberately outside it: scaling a heading resamples its
+          glyphs every frame, and a Didone loses its hairlines first.
+        */}
+        <div
+          ref={cameraRef}
+          className="absolute inset-0 will-change-transform"
+          style={{ perspective: "2000px", transformStyle: "preserve-3d" }}
+        >
+          {/* Placed with a negative margin rather than a translate: the loop
+              owns `transform` on these elements, and a Tailwind centring
+              transform would be overwritten on the first frame. */}
+          <LightPlate
+            ref={keyLightRef}
+            className="top-[4%] left-1/2 -ml-[40svh] h-[80svh] w-[80svh]"
+          />
+          <LightPlate
+            variant="rim"
+            ref={rimLightRef}
+            className="top-[14%] left-1/2 -ml-[26svh] h-[58svh] w-[52svh]"
+          />
+
+          {/* The opening frame: the wordmark, alone. */}
+          <div
+            ref={wordRef}
+            style={{ opacity: 1 }}
+            className="pointer-events-none absolute inset-0 flex items-center justify-center will-change-[opacity,transform,filter]"
+          >
+            <h1 className="block font-display text-[11.8vw] leading-none tracking-[0.08em] whitespace-nowrap text-bone uppercase select-none">
+              Millionaire
+            </h1>
+          </div>
+
+          {/* The garment. */}
+          <div
+            ref={figureRef}
+            style={{ opacity: 0 }}
+            className="absolute inset-0 flex items-center justify-center will-change-[opacity,transform,filter]"
+          >
+            {/* A second, tighter perspective for the frames themselves, so the
+                turn reads strongly at the scale of the object while the camera
+                above it stays wide. */}
+            <div
+              className="relative h-[78svh] w-[78svh] max-w-[92vw]"
+              style={{ perspective: "1600px", transformStyle: "preserve-3d" }}
+            >
+              {millionaireSetTurnaroundCutout.frames.map((frame, index) => (
+                <div
+                  key={`${frame.angle}-${frame.mirrored}`}
+                  ref={(node) => {
+                    frameRefs.current[index] = node;
+                  }}
+                  className="absolute inset-0 will-change-[opacity,transform]"
+                  style={{ opacity: index === 0 ? 1 : 0 }}
+                >
+                  <Image
+                    src={frame.src}
+                    alt={index === 0 ? millionaireSetTurnaroundCutout.alt : ""}
+                    priority={index < 2}
+                    sizes="(max-width: 768px) 92vw, 78vh"
+                    className="h-full w-full object-contain"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
 
         {/* Scrim under the chapter copy on narrow screens, where the type sits
             over the garment rather than beside it. Absent from lg up. */}
@@ -385,50 +665,6 @@ function FilmLive({ product }: { product: Product }) {
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 bottom-0 h-[62svh] bg-gradient-to-t from-[#08080a] via-[#08080a]/88 to-transparent lg:hidden"
         />
-
-        {/* The opening frame: the wordmark, alone. */}
-        <div
-          ref={wordRef}
-          style={{ opacity: 1 }}
-          className="pointer-events-none absolute inset-0 flex items-center justify-center will-change-[opacity,transform,filter]"
-        >
-          <h1 className="block font-display text-[11.8vw] leading-none tracking-[0.08em] whitespace-nowrap text-bone uppercase select-none">
-            Millionaire
-          </h1>
-        </div>
-
-        {/* The garment. */}
-        <div
-          ref={figureRef}
-          style={{ opacity: 0 }}
-          className="absolute inset-0 flex items-center justify-center will-change-[opacity,transform]"
-        >
-          {/* Perspective lives here so the frames inside can genuinely rotate
-              in depth rather than just squash horizontally. */}
-          <div
-            className="relative h-[78svh] w-[78svh] max-w-[92vw]"
-            style={{ perspective: "1600px", transformStyle: "preserve-3d" }}
-          >
-            {millionaireSetTurnaroundCutout.frames.map((frame, index) => (
-              <div
-                key={`${frame.angle}-${frame.mirrored}`}
-                ref={(node) => {
-                  frameRefs.current[index] = node;
-                }}
-                className="absolute inset-0 will-change-[opacity,transform]"
-                style={{ opacity: index === 0 ? 1 : 0 }}
-              >
-                <Image
-                  src={frame.src}
-                  alt={index === 0 ? millionaireSetTurnaroundCutout.alt : ""}
-                  priority={index < 2}
-                  sizes="(max-width: 768px) 92vw, 78vh"
-                  className="h-full w-full object-contain"
-                />
-              </div>
-            ))}
-          </div>
-        </div>
 
         {/* Chapters I–III. */}
         {CHAPTERS.map((chapter, index) => (
