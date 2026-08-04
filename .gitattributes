@@ -1,0 +1,14 @@
+# Normalise line endings in the repository. Everything is stored and checked out
+# as LF so Windows and CI never disagree about a file's contents.
+* text=auto eol=lf
+
+# Binary assets — never normalise, never diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.avif binary
+*.webp binary
+*.jfif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

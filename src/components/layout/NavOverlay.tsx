@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import * as motionReact from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import Link from "next/link";
 import { useEffect } from "react";
 import { Signature } from "@/components/brand/Signature";
@@ -9,8 +9,6 @@ import { Overline } from "@/components/ui/Overline";
 import { EASE_SIGNATURE, STAGGER_STEP } from "@/lib/motion/tokens";
 import { PRIMARY_NAV, SECONDARY_NAV } from "@/lib/navigation";
 import { lockScroll, unlockScroll } from "@/lib/scroll/lenis";
-
-const { AnimatePresence, motion } = motionReact;
 
 type NavOverlayProps = {
   open: boolean;

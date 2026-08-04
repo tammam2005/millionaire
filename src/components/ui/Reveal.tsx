@@ -1,11 +1,9 @@
 "use client";
 
-import * as motionReact from "motion/react";
+import { motion } from "motion/react";
 import type { ReactNode } from "react";
 import { lineReveal, riseIn, stagger } from "@/lib/motion/tokens";
 import { cn } from "@/lib/utils/cn";
-
-const { motion } = motionReact;
 
 type RevealProps = {
   children: ReactNode;

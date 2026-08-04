@@ -16,6 +16,21 @@ const MIN_HOLD_MS = 1100;
 const READY_CEILING_MS = 1300;
 const FLIGHT = 0.9;
 
+/**
+ * Absolute dismissal, whatever happens.
+ *
+ * The sequence below `await`s animation promises, and those only settle when
+ * the browser produces frames. A backgrounded tab, a throttled renderer or a
+ * low-power mode can stop delivering them — and because the hero waits for
+ * this overlay to lift before it animates in, a stalled intro does not degrade
+ * the page, it leaves a permanently black screen.
+ *
+ * So the ceiling is enforced by a timer that owes nothing to rAF. Slightly
+ * beyond the readiness ceiling plus the flight, so it never truncates a
+ * sequence that is running normally — it only ever rescues one that is not.
+ */
+const HARD_CEILING_MS = 2600;
+
 export const PRELOADER_SESSION_KEY = "mn-preloaded";
 
 /**
@@ -61,9 +76,12 @@ export function Preloader() {
 
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let cancelled = false;
+    let settled = false;
 
     const finish = () => {
-      if (cancelled) return;
+      if (cancelled || settled) return;
+      settled = true;
+      window.clearTimeout(rescue);
       try {
         sessionStorage.setItem(PRELOADER_SESSION_KEY, "1");
       } catch {
@@ -74,6 +92,9 @@ export function Preloader() {
       // rest, with no re-render.
       root.dataset.preloader = "done";
     };
+
+    // Armed before anything else runs, so a stall at any point is covered.
+    const rescue = window.setTimeout(finish, HARD_CEILING_MS);
 
     /** Resolves when the page is genuinely ready, or when we give up waiting. */
     const readiness = Promise.race([
@@ -153,6 +174,7 @@ export function Preloader() {
 
     return () => {
       cancelled = true;
+      window.clearTimeout(rescue);
     };
   }, [animate, scope]);
 

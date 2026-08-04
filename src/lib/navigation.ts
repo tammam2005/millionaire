@@ -15,7 +15,8 @@ export interface NavLink {
  * drops browse by moment.
  */
 export const PRIMARY_NAV: readonly NavLink[] = [
-  { href: "/collections", label: "Collections", meta: "The core line" },
+  // The house sells one set, so the primary link is that set — not an index.
+  { href: "/#purchase", label: "The Set", meta: "The complete look" },
   { href: "/drops", label: "Drops", meta: "Limited releases" },
   { href: "/lookbook", label: "Lookbook", meta: "Campaign" },
   { href: "/about", label: "About", meta: "The house" },

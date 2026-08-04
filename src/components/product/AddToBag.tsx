@@ -63,7 +63,7 @@ export function AddToBag({ product }: AddToBagProps) {
                     available
                       ? isSelected
                         ? "border-bone text-bone"
-                        : "border-graphite text-stone hover:border-ash hover:text-bone"
+                        : "border-graphite text-stone hover:border-line hover:text-bone"
                       : // Struck through, not hidden: the size existed.
                         "cursor-not-allowed border-graphite text-ash line-through",
                   )}

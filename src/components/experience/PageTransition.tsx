@@ -1,11 +1,9 @@
 "use client";
 
-import * as motionReact from "motion/react";
+import { motion } from "motion/react";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { EASE_SIGNATURE } from "@/lib/motion/tokens";
-
-const { motion } = motionReact;
 
 /**
  * Route-change transition.

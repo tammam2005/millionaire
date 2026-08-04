@@ -8,7 +8,7 @@ const VARIANT: Record<Variant, string> = {
   /* Bone on void — reserved for the single most important action on a view. */
   solid: "bg-bone text-void hover:bg-silver",
   /* Hairline box. The default for everything that isn't the primary action. */
-  outline: "border border-ash text-bone hover:border-bone hover:bg-bone/5",
+  outline: "border border-line text-bone hover:border-bone hover:bg-bone/5",
   /* Text with a rule that draws in on hover. Used inline and in nav. */
   quiet: "text-stone hover:text-bone",
 };

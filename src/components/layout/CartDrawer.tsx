@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import * as motionReact from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect } from "react";
@@ -12,8 +12,6 @@ import { useResolvedLines } from "@/lib/cart/useResolvedLines";
 import { formatMoney, multiplyMoney } from "@/lib/commerce";
 import { EASE_SIGNATURE } from "@/lib/motion/tokens";
 import { lockScroll, unlockScroll } from "@/lib/scroll/lenis";
-
-const { AnimatePresence, motion } = motionReact;
 
 type CartDrawerProps = {
   open: boolean;

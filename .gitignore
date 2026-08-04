@@ -46,3 +46,7 @@ next-env.d.ts
 # per-machine Claude Code settings: absolute paths and personal permission
 # grants. .claude/launch.json IS tracked — that one is project config.
 .claude/settings.local.json
+
+# visual QA sheets for the garment mattes — regenerate with
+# `node scripts/qa-cutouts.mjs`. Output, not source.
+/.qa/

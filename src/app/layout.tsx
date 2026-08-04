@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { CartHydrator } from "@/components/experience/CartHydrator";
 import { Cursor } from "@/components/experience/Cursor";
+import { Grain } from "@/components/experience/Grain";
 import { Preloader } from "@/components/experience/Preloader";
 import { SmoothScroll } from "@/components/experience/SmoothScroll";
 import { fontVariables } from "@/lib/fonts";
@@ -68,10 +69,26 @@ export default function RootLayout({
         */}
         <script dangerouslySetInnerHTML={{ __html: PRELOADER_BOOTSTRAP }} />
 
-        {/* Without JS the overlay would never be dismissed, leaving the page
-            permanently covered. Content must win over the intro. */}
+        {/*
+          No-JavaScript fallback.
+
+          Two separate failures to cover, both of which leave a blank page:
+
+          1. The intro overlay is dismissed by script, so without one it stays
+             up forever and covers everything.
+
+          2. Scroll reveals are the bigger problem. `motion` serialises each
+             element's `initial` state into the server HTML — 27 elements ship
+             with `opacity:0` — so if script never runs, the content never
+             becomes visible. The animation is meant to be an enhancement, but
+             the hidden starting state is baked into the markup.
+
+          Resetting inline opacity and transform is blunt, but under `noscript`
+          nothing is animating anyway, so there is nothing to preserve. Content
+          being visible beats content being composed.
+        */}
         <noscript>
-          <style>{`[data-preloader-overlay]{display:none!important}[data-wordmark-target]{opacity:1!important}`}</style>
+          <style>{`[data-preloader-overlay]{display:none!important}[data-wordmark-target]{opacity:1!important}main [style*="opacity:0"],main [style*="opacity: 0"]{opacity:1!important}main [style*="transform"]{transform:none!important}`}</style>
         </noscript>
       </head>
       <body className="flex min-h-full flex-col">
@@ -80,6 +97,7 @@ export default function RootLayout({
             intro — so callers never branch on device or preference. */}
         <SmoothScroll />
         <Cursor />
+        <Grain />
         <Preloader />
         <CartHydrator />
         {children}

@@ -78,7 +78,7 @@ export function Footer() {
                 type="email"
                 required
                 placeholder="Email"
-                className="w-full border-b border-ash bg-transparent py-2 text-(length:--text-caption) text-bone transition-colors outline-none placeholder:text-ash focus:border-bone"
+                className="w-full border-b border-line bg-transparent py-2 text-(length:--text-caption) text-bone transition-colors outline-none placeholder:text-ash focus:border-bone"
               />
               <button
                 type="submit"

@@ -23,6 +23,20 @@ export interface Turnaround {
 }
 
 /**
+ * A figure matted off its studio backdrop.
+ *
+ * `bounds` are the subject's extents as fractions of the frame, measured
+ * during extraction. Layouts use them to align the figure by its actual
+ * silhouette rather than by the transparent box around it — the difference
+ * between type that meets the shoulder line and type that merely sits near it.
+ */
+export interface Cutout {
+  src: StaticImageData;
+  alt: string;
+  bounds: { top: number; bottom: number; left: number; right: number };
+}
+
+/**
  * Everything the hero needs to compose itself.
  *
  * Isolating this into a descriptor is what makes the hero resolution-agnostic:

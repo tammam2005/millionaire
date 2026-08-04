@@ -32,14 +32,28 @@ export function Header() {
 
   return (
     <>
+      {/*
+        The condense is expressed with paint-only properties.
+
+        Transitioning `padding` here would reflow the document on every scroll
+        direction change — on a fixed element, during scrolling, which is the
+        most expensive place in the page to do it. The height therefore stays
+        constant and the *brand mark* scales instead, which is a transform and
+        composites on the GPU.
+
+        `backdrop-blur` is toggled rather than transitioned. Animating a
+        backdrop filter forces the browser to re-blur everything behind it each
+        frame; switching it on alongside the background fade is visually
+        identical and costs nothing while the header is transparent.
+      */}
       <header
         className={cn(
-          "fixed inset-x-0 top-0 z-40",
-          "transition-[background-color,backdrop-filter,border-color,padding] duration-(--duration-micro) ease-(--ease-signature)",
+          "fixed inset-x-0 top-0 z-40 py-5",
+          "transition-[background-color,border-color] duration-(--duration-micro) ease-(--ease-signature)",
           "px-(--spacing-gutter)",
           condensed
-            ? "border-b border-graphite bg-void/80 py-4 backdrop-blur-xl"
-            : "border-b border-transparent py-7",
+            ? "border-b border-graphite bg-void/80 backdrop-blur-xl"
+            : "border-b border-transparent",
         )}
       >
         <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-6">
@@ -49,7 +63,13 @@ export function Header() {
             className="flex items-center gap-3"
             aria-label="MILLIONAIRE — home"
           >
-            <Monogram size={condensed ? 20 : 26} className="transition-all" />
+            <Monogram
+              size={26}
+              className={cn(
+                "origin-left transition-transform duration-(--duration-micro) ease-(--ease-signature)",
+                condensed ? "scale-[0.78]" : "scale-100",
+              )}
+            />
             {/*
               The preloader measures this element and flies its own oversized
               wordmark onto it, so the identifier has to stay stable. `opacity`

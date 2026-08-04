@@ -1,10 +1,8 @@
 "use client";
 
-import * as motionReact from "motion/react";
+import { motion } from "motion/react";
 import { drawRule } from "@/lib/motion/tokens";
 import { cn } from "@/lib/utils/cn";
-
-const { motion } = motionReact;
 
 type RuleProps = {
   /** Where the line grows from as it draws. */
