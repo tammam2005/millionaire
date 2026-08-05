@@ -1,4 +1,4 @@
-import { arcxMftaBack, millionaireSetTurnaround } from "@/lib/media/assets";
+import { arcxMftaBack, cutouts, millionaireSetTurnaround } from "@/lib/media/assets";
 import setFront from "@/assets/products/millionaire-set/front.jpg";
 import setSide from "@/assets/products/millionaire-set/side.jpg";
 import setThreeQuarter from "@/assets/products/millionaire-set/three-quarter.jpg";
@@ -59,7 +59,11 @@ export const PRODUCTS: readonly Product[] = [
     releaseType: "core",
     collectionIds: ["col-core", "col-blackout"],
     variants: sizeRun("MN-SET", { XS: 0, M: 2, L: 1, XXL: 3 }),
-    media: { primary: setFront, turnaround: millionaireSetTurnaround },
+    media: {
+      primary: setFront,
+      cutout: cutouts.front.src,
+      turnaround: millionaireSetTurnaround,
+    },
     details: CARE,
   },
   {
@@ -73,7 +77,7 @@ export const PRODUCTS: readonly Product[] = [
     releaseType: "core",
     collectionIds: ["col-core", "col-blackout"],
     variants: sizeRun("MN-HD", { XS: 0, S: 3, M: 1 }),
-    media: { primary: setThreeQuarter },
+    media: { primary: setThreeQuarter, cutout: cutouts.threeQuarter.src },
     details: CARE,
   },
   {
@@ -87,7 +91,7 @@ export const PRODUCTS: readonly Product[] = [
     releaseType: "core",
     collectionIds: ["col-core", "col-blackout"],
     variants: sizeRun("MN-JG", { L: 2, XXL: 0 }),
-    media: { primary: setSide },
+    media: { primary: setSide, cutout: cutouts.side.src },
     details: CARE,
   },
   {
@@ -101,7 +105,7 @@ export const PRODUCTS: readonly Product[] = [
     releaseType: "core",
     collectionIds: ["col-core", "col-blackout"],
     variants: sizeRun("MN-BL", { "One Size": 14 }, ["One Size"]),
-    media: { primary: setFront },
+    media: { primary: setFront, cutout: cutouts.front.src },
     details: [
       { label: "Composition", value: "Fine gauge merino, unlined" },
       { label: "Care", value: "Hand wash cold. Dry flat." },
@@ -120,7 +124,7 @@ export const PRODUCTS: readonly Product[] = [
     dropId: "drp-arcx",
     collectionIds: ["col-blackout"],
     variants: sizeRun("MN-ARCX", { XS: 0, S: 1, M: 0, L: 2, XL: 4, XXL: 0 }),
-    media: { primary: arcxMftaBack },
+    media: { primary: arcxMftaBack, cutout: cutouts.arcxBack.src },
     details: CARE,
   },
 ];

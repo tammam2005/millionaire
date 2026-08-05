@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import { notFound } from "next/navigation";
 import { AddToBag } from "@/components/product/AddToBag";
+import { ProductStage } from "@/components/product/ProductStage";
 import { Overline } from "@/components/ui/Overline";
 import { Rule } from "@/components/ui/Rule";
 import { commerce, formatMoney, getProductStatus } from "@/lib/commerce";
@@ -49,16 +49,10 @@ export default async function ProductPage({ params }: { params: Promise<Params> 
   return (
     <main className="flex-1 px-(--spacing-gutter) pt-36 pb-(--spacing-section)">
       <div className="mx-auto grid max-w-[1600px] gap-14 lg:grid-cols-2 lg:gap-20">
-        <div className="bg-studio">
-          <Image
-            src={product.media.primary}
-            alt={product.title}
-            placeholder="blur"
-            priority
-            sizes="(min-width: 1024px) 50vw, 100vw"
-            className="h-auto w-full"
-          />
-        </div>
+        <ProductStage
+          src={product.media.cutout ?? product.media.primary}
+          alt={product.title}
+        />
 
         <div className="lg:py-10">
           <Overline tone="silver">{product.overline}</Overline>

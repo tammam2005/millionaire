@@ -278,6 +278,20 @@ html[data-preloader="done"] [data-preloader-overlay] {
       var(--color-studio-far) 100%
     );
   }
+
+  /* The dark inverse of .bg-studio: a lit stage rather than a light box, for
+     the matted cutouts to stand in rather than the flat backdrop render.
+     Same measured tokens as everywhere else on the void — this is void and
+     ink doing the "very dark charcoal gradient" a product shoot like this
+     actually wants, not a new colour invented for the occasion. */
+  .bg-studio-void {
+    background-image: radial-gradient(
+      ellipse 120% 85% at 50% 78%,
+      var(--color-ink) 0%,
+      var(--color-void) 60%,
+      #050506 100%
+    );
+  }
 }
 
 @utility text-overline {

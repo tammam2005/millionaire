@@ -38,6 +38,16 @@ export interface Variant {
 
 export interface ProductMedia {
   primary: StaticImageData;
+  /**
+   * The same render, matted off its studio backdrop.
+   *
+   * Present for every product today (`scripts/extract-cutouts.mjs` runs
+   * against the whole catalogue), but kept optional rather than merged into
+   * `primary` — a garment that only ever existed as one flat render is a real
+   * case a future catalogue addition could hit, and a surface reading this
+   * field should fall back to `primary` rather than assume it exists.
+   */
+  cutout?: StaticImageData;
   /** Present only where enough camera angles exist to rotate. */
   turnaround?: Turnaround;
 }
