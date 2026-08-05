@@ -3,16 +3,22 @@ import { notFound } from "next/navigation";
 import { AddToBag } from "@/components/product/AddToBag";
 import { ProductStage } from "@/components/product/ProductStage";
 import { Overline } from "@/components/ui/Overline";
+import { Reveal } from "@/components/ui/Reveal";
 import { Rule } from "@/components/ui/Rule";
 import { commerce, formatMoney, getProductStatus } from "@/lib/commerce";
 
 /**
- * Product page — Phase 3 form.
+ * Product page.
  *
- * Deliberately plain. Its job right now is to prove the commerce layer end to
- * end: a server component reading through the provider, static params
- * generated from the catalogue, and a working path into the bag. The
- * turnaround gallery, sticky buy bar and related products arrive in Phase 5.
+ * The garment holds its position on desktop while the copy scrolls past
+ * beside it — the same "the product never leaves" idea the homepage film is
+ * built on, applied here without any of its machinery. Description and
+ * details arrive on `Reveal`, the site's ordinary scroll-into-view primitive;
+ * nothing on this page runs its own animation loop.
+ *
+ * The description leads, ahead of price — story before transaction. Nothing
+ * about the buy control changes: `AddToBag` is never wrapped in a reveal, so
+ * it is always immediately present, never something a customer waits on.
  */
 
 type Params = { slug: string };
@@ -49,10 +55,12 @@ export default async function ProductPage({ params }: { params: Promise<Params> 
   return (
     <main className="flex-1 px-(--spacing-gutter) pt-36 pb-(--spacing-section)">
       <div className="mx-auto grid max-w-[1600px] gap-14 lg:grid-cols-2 lg:gap-20">
-        <ProductStage
-          src={product.media.cutout ?? product.media.primary}
-          alt={product.title}
-        />
+        <div className="lg:sticky lg:top-32 lg:self-start">
+          <ProductStage
+            src={product.media.cutout ?? product.media.primary}
+            alt={product.title}
+          />
+        </div>
 
         <div className="lg:py-10">
           <Overline tone="silver">{product.overline}</Overline>
@@ -61,7 +69,15 @@ export default async function ProductPage({ params }: { params: Promise<Params> 
             {product.title}
           </h1>
 
-          <p className="mt-6 text-(length:--text-body-lg) text-bone tabular-nums">
+          <Rule className="mt-10 mb-10" />
+
+          <Reveal>
+            <p className="max-w-prose text-(length:--text-body-lg) text-stone">
+              {product.description}
+            </p>
+          </Reveal>
+
+          <p className="mt-8 text-(length:--text-body-lg) text-bone tabular-nums">
             {formatMoney(product.price)}
           </p>
 
@@ -75,29 +91,25 @@ export default async function ProductPage({ params }: { params: Promise<Params> 
             </p>
           ) : null}
 
-          <Rule className="mt-10 mb-10" />
-
-          <p className="max-w-prose text-(length:--text-body) text-stone">
-            {product.description}
-          </p>
-
-          <div className="mt-12">
+          <div className="mt-8">
             <AddToBag product={product} />
           </div>
 
-          <dl className="mt-16 border-t border-graphite">
-            {product.details.map((detail) => (
-              <div
-                key={detail.label}
-                className="flex gap-6 border-b border-graphite py-4"
-              >
-                <dt className="w-32 shrink-0 text-overline text-ash">{detail.label}</dt>
-                <dd className="text-(length:--text-caption) text-stone">
-                  {detail.value}
-                </dd>
-              </div>
-            ))}
-          </dl>
+          <Reveal delay={0.08}>
+            <dl className="mt-16 border-t border-graphite">
+              {product.details.map((detail) => (
+                <div
+                  key={detail.label}
+                  className="flex gap-6 border-b border-graphite py-4"
+                >
+                  <dt className="w-32 shrink-0 text-overline text-ash">{detail.label}</dt>
+                  <dd className="text-(length:--text-caption) text-stone">
+                    {detail.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </Reveal>
         </div>
       </div>
     </main>
