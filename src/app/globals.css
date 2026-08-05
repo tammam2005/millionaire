@@ -281,15 +281,17 @@ html[data-preloader="done"] [data-preloader-overlay] {
 
   /* The dark inverse of .bg-studio: a lit stage rather than a light box, for
      the matted cutouts to stand in rather than the flat backdrop render.
-     Same measured tokens as everywhere else on the void — this is void and
-     ink doing the "very dark charcoal gradient" a product shoot like this
-     actually wants, not a new colour invented for the occasion. */
+     Deliberately pure neutral grey rather than the brand's void/ink tokens —
+     those carry a two-value blue bias (imperceptible as a hairline border,
+     visible once it's the dominant colour of a large soft-lit field) which
+     read as a cool/violet cast once a warm key light sat on top of it. A
+     product plate gets its own truly neutral black instead. */
   .bg-studio-void {
     background-image: radial-gradient(
       ellipse 120% 85% at 50% 78%,
-      var(--color-ink) 0%,
-      var(--color-void) 60%,
-      #050506 100%
+      #0d0d0d 0%,
+      #050505 60%,
+      #000000 100%
     );
   }
 }
