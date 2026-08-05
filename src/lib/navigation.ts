@@ -15,8 +15,9 @@ export interface NavLink {
  * drops browse by moment.
  */
 export const PRIMARY_NAV: readonly NavLink[] = [
-  // The house sells one set, so the primary link is that set — not an index.
+  // The homepage film sells the flagship set directly — that link stays first.
   { href: "/#purchase", label: "The Set", meta: "The complete look" },
+  { href: "/collections", label: "Shop", meta: "Full catalogue" },
   { href: "/drops", label: "Drops", meta: "Limited releases" },
   { href: "/lookbook", label: "Lookbook", meta: "Campaign" },
   { href: "/about", label: "About", meta: "The house" },
