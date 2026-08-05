@@ -5,13 +5,15 @@ import { AnimatePresence, motion } from "motion/react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect } from "react";
-import { Button } from "@/components/ui/Button";
+import { useShallow } from "zustand/react/shallow";
+import { buttonClass } from "@/components/ui/Button";
 import { Overline } from "@/components/ui/Overline";
 import { selectSubtotal, useCartStore } from "@/lib/cart/store";
 import { useResolvedLines } from "@/lib/cart/useResolvedLines";
 import { formatMoney, multiplyMoney } from "@/lib/commerce";
 import { EASE_SIGNATURE } from "@/lib/motion/tokens";
 import { lockScroll, unlockScroll } from "@/lib/scroll/lenis";
+import { buildOrderUrl } from "@/lib/whatsapp";
 
 type CartDrawerProps = {
   open: boolean;
@@ -20,7 +22,13 @@ type CartDrawerProps = {
 
 export function CartDrawer({ open, onOpenChange }: CartDrawerProps) {
   const lines = useResolvedLines();
-  const subtotal = useCartStore(selectSubtotal);
+  // `selectSubtotal` builds a new Money object on every call (it reduces over
+  // the lines), so a plain selector defeats useSyncExternalStore's identity
+  // check and spins into "Maximum update depth exceeded" the moment the bag
+  // holds anything — an empty bag never hit this because reduce over an empty
+  // array short-circuits to the same ZERO constant every time. useShallow
+  // compares the object's own fields instead of its reference.
+  const subtotal = useCartStore(useShallow(selectSubtotal));
   const setQuantity = useCartStore((state) => state.setQuantity);
   const removeLine = useCartStore((state) => state.removeLine);
 
@@ -167,11 +175,27 @@ export function CartDrawer({ open, onOpenChange }: CartDrawerProps) {
                       {formatMoney(subtotal)}
                     </span>
                   </div>
-                  <Button variant="solid" className="w-full" disabled={isEmpty}>
-                    Checkout
-                  </Button>
+                  {isEmpty ? (
+                    <button
+                      type="button"
+                      disabled
+                      className={buttonClass("solid", "w-full")}
+                    >
+                      Order via WhatsApp
+                    </button>
+                  ) : (
+                    <a
+                      href={buildOrderUrl(lines, subtotal)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-cursor-magnetic
+                      className={buttonClass("solid", "w-full")}
+                    >
+                      Order via WhatsApp
+                    </a>
+                  )}
                   <p className="mt-4 text-center text-[0.6875rem] text-ash">
-                    Shipping and duties calculated at checkout.
+                    Opens WhatsApp with your order filled in — confirm it there.
                   </p>
                 </footer>
               </motion.aside>

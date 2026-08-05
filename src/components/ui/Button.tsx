@@ -32,6 +32,15 @@ const base = cn(
   "disabled:pointer-events-none disabled:opacity-40",
 );
 
+/**
+ * The look, with no element attached — for the rare control that cannot be a
+ * `<button>` or a `next/link` `<Link>`, such as a plain external anchor.
+ * `Button` and `ButtonLink` are themselves built on this.
+ */
+export function buttonClass(variant: Variant = "outline", className?: string): string {
+  return cn(base, VARIANT[variant], className);
+}
+
 type ButtonProps = BaseProps & ComponentPropsWithoutRef<"button">;
 
 export function Button({
@@ -41,11 +50,7 @@ export function Button({
   ...props
 }: ButtonProps) {
   return (
-    <button
-      data-cursor-magnetic
-      className={cn(base, VARIANT[variant], className)}
-      {...props}
-    >
+    <button data-cursor-magnetic className={buttonClass(variant, className)} {...props}>
       {children}
     </button>
   );
@@ -67,11 +72,7 @@ export function ButtonLink({
   ...props
 }: ButtonLinkProps) {
   return (
-    <Link
-      data-cursor-magnetic
-      className={cn(base, VARIANT[variant], className)}
-      {...props}
-    >
+    <Link data-cursor-magnetic className={buttonClass(variant, className)} {...props}>
       {children}
     </Link>
   );
