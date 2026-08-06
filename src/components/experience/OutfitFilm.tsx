@@ -32,19 +32,6 @@ const T = {
   buy: 0.82,
 } as const;
 
-/** Camera angle the garment holds during each chapter. */
-const ANGLE_STOPS: readonly [number, number][] = [
-  [T.morphEnd, 0],
-  [T.ch1, 35],
-  [T.ch2, 90],
-  [T.ch3, 180],
-  [T.buy, 360],
-];
-
-const normalise = (a: number) => ((a % 360) + 360) % 360;
-const BLEND_START = 0.34;
-const BLEND_END = 0.66;
-
 type Chapter = {
   overline: string;
   title: string;
@@ -99,8 +86,13 @@ const CHAPTERS: readonly Chapter[] = [
  * rather than as a page of sections, and it is why everything below shares one
  * sticky stage and one scroll clock.
  *
- * Rotation reuses the turnaround frames, so the "3D" is real photography
- * blended between shot angles rather than a model — and it costs six images.
+ * The turn is a real turntable clip, scrubbed by scroll rather than played:
+ * `currentTime` is written from the same smoothed progress value that drives
+ * the wordmark, the copy and the purchase panel, so the garment rotates only
+ * while the page moves and holds whatever frame it stopped on.
+ *
+ * Reduced motion gets `FilmStatic`, which keeps the still cutouts — a clip
+ * that only moves on scroll is still motion, and nothing there should autoplay.
  */
 export function OutfitFilm({ product }: { product: Product }) {
   const motionAllowed = useMotionPreference();
@@ -154,8 +146,60 @@ function stopsAt(p: number, stops: readonly (readonly [number, number])[]): numb
  */
 const FILM_LERP = 0.075;
 
-/** Degrees of Y-rotation applied per degree of turn away from camera. */
-const ROTATION_DEPTH = 0.55;
+/**
+ * The turntable clip.
+ *
+ * Never played — `currentTime` is written directly from the same smoothed
+ * scroll value that drives everything else on the stage, so the garment turns
+ * only while the page moves and holds the exact frame it stopped on. The
+ * filename is the one the client supplied; the space has to be encoded or the
+ * request 404s.
+ */
+const TURNTABLE_SRC = "/videos/Create_a_perfectly_smooth_luxu%202.mp4";
+
+/**
+ * The clip's frame interval, in seconds.
+ *
+ * Used as the pump's resolution rather than as a grid to snap to: seek targets
+ * stay continuous, because quantising them throws away the sub-frame precision
+ * that decides *which* frame the decoder lands on near a boundary, and that
+ * shows up as the scrub sticking and then jumping. Half of this is the
+ * threshold below which a seek cannot change what is on screen, and one of it
+ * is how far back from `duration` the last reachable frame sits.
+ */
+const FRAME_STEP = 1 / 24;
+
+/** Filter id for the background key. Must be unique in the document. */
+const KEY_FILTER_ID = "millionaire-studio-key";
+
+/**
+ * Largest distance, in frames, a single seek is allowed to cover.
+ *
+ * Without a cap the pump always aims at wherever the scroll has got to, so a
+ * quick flick asks the decoder to jump twenty frames and the turn arrives as
+ * one visible lurch. Capping the step makes it walk the intermediate frames
+ * instead — each decode costs the same, but the ones that land describe a
+ * continuous rotation rather than a cut. Six is the point where it stops
+ * reading as a jump without falling so far behind that the garment lags the
+ * page.
+ */
+const MAX_SEEK_FRAMES = 6;
+
+/**
+ * Horizontal glide applied per frame of un-decoded residual, in pixels.
+ *
+ * Sub-frame interpolation. The decoder can only hand over whole frames, and on
+ * this clip it hands them over at roughly a tenth the rate the display
+ * refreshes — so between two decodes the garment is, strictly, frozen. Sliding
+ * the presented frame by the fraction of a frame still owed keeps something
+ * moving on every one of those refreshes, in the direction the turn is already
+ * going, so the eye reads continuous motion instead of a held image.
+ *
+ * Small on purpose: a frame of this turntable moves the silhouette a couple of
+ * pixels, so this is calibrated to that and no further. Larger values buy
+ * apparent smoothness at the price of the figure visibly swimming.
+ */
+const SUBFRAME_GLIDE_PX = 2.4;
 
 const WORD_OPACITY = [
   [0, 1],
@@ -221,7 +265,7 @@ const BUY_Y = [
 
 function FilmLive({ product }: { product: Product }) {
   const sectionRef = useRef<HTMLElement>(null);
-  const frameRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const wordRef = useRef<HTMLDivElement>(null);
   const figureRef = useRef<HTMLDivElement>(null);
   const panelRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -239,11 +283,79 @@ function FilmLive({ product }: { product: Product }) {
    * re-render per frame would be the most expensive thing on the page.
    */
   useEffect(() => {
-    const frames = millionaireSetTurnaroundCutout.frames;
     let raf = 0;
     // Lagging copy of the scroll position, and a lagging copy of the pointer.
     let smoothed = scrollYProgress.get();
     const camera = { x: 0, y: 0, tx: 0, ty: 0 };
+    /*
+       The scrub pump.
+
+       Seeking from inside the rAF loop couples the decoder to the display
+       clock, and the two do not agree: a seek that takes longer than a frame
+       makes the loop skip its next turn and then jump two frames at once,
+       which is the stepping you feel rather than see. So the loop only ever
+       records where the video *should* be, and a separate pump issues one
+       seek at a time, starting the next the instant `seeked` confirms the
+       last one landed. Frames then arrive as fast as the decoder can retire
+       them, at its own even cadence, with nothing queued behind a stale
+       request.
+    */
+    let seekTarget = 0;
+    let seekInFlight = false;
+
+    const pump = () => {
+      const video = videoRef.current;
+      if (!video || seekInFlight || !(video.duration > 0)) return;
+      // Never ask for the timestamp at `duration` itself: decoders disagree
+      // about whether a sample exists there, and the ones that say no snap
+      // back to frame 0 — a front view flashing in behind the purchase panel.
+      const wanted = Math.min(seekTarget * video.duration, video.duration - FRAME_STEP);
+      const shown = video.currentTime;
+      // Below half a frame the decoder would hand back the frame already on
+      // screen, so the seek costs a decode and changes nothing.
+      if (Math.abs(wanted - shown) < FRAME_STEP * 0.5) return;
+      // Walk toward the target rather than leaping to it — see MAX_SEEK_FRAMES.
+      const reach = FRAME_STEP * MAX_SEEK_FRAMES;
+      const delta = wanted - shown;
+      const desired = Math.abs(delta) > reach ? shown + Math.sign(delta) * reach : wanted;
+      seekInFlight = true;
+      video.currentTime = desired;
+    };
+
+    const onSeeked = () => {
+      seekInFlight = false;
+      pump();
+    };
+
+    /*
+       `seeked` fires when the decoder has the frame, which is not the same
+       instant the compositor has shown it. `requestVideoFrameCallback` fires
+       on presentation, so releasing the pump there starts the next decode
+       exactly as the previous frame reaches the screen — no gap waiting for a
+       rAF turn, and no second seek issued against a frame still in flight.
+       Chrome and Safari have it; Firefox does not, which is why `seeked`
+       stays wired up as the fallback rather than being replaced.
+    */
+    type FrameCallbackVideo = HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: () => void) => number;
+      cancelVideoFrameCallback?: (handle: number) => void;
+    };
+    let frameHandle = 0;
+    const watchFrames = (video: FrameCallbackVideo) => {
+      if (!video.requestVideoFrameCallback) return;
+      frameHandle = video.requestVideoFrameCallback(() => {
+        seekInFlight = false;
+        pump();
+        watchFrames(video);
+      });
+    };
+
+    const videoEl = videoRef.current;
+    videoEl?.addEventListener("seeked", onSeeked);
+    // A seek that fails still has to release the pump, or the scrub stalls
+    // for good on the frame it happened to be holding.
+    videoEl?.addEventListener("error", onSeeked);
+    if (videoEl) watchFrames(videoEl);
 
     const reduced = window.matchMedia("(pointer: coarse)").matches;
     const onPointerMove = (event: PointerEvent) => {
@@ -255,16 +367,6 @@ function FilmLive({ product }: { product: Product }) {
     };
     if (!reduced)
       window.addEventListener("pointermove", onPointerMove, { passive: true });
-
-    const angleAt = (p: number) => {
-      if (p <= ANGLE_STOPS[0]![0]) return ANGLE_STOPS[0]![1];
-      for (let i = 1; i < ANGLE_STOPS.length; i++) {
-        const [pa, aa] = ANGLE_STOPS[i - 1]!;
-        const [pb, ab] = ANGLE_STOPS[i]!;
-        if (p <= pb) return aa + ((p - pa) / (pb - pa)) * (ab - aa);
-      }
-      return ANGLE_STOPS[ANGLE_STOPS.length - 1]![1];
-    };
 
     const tick = () => {
       // Everything downstream reads the eased value, never the raw one.
@@ -313,52 +415,53 @@ function FilmLive({ product }: { product: Product }) {
         purchaseRef.current.style.pointerEvents = o > 0.9 ? "auto" : "none";
       }
 
-      const angle = normalise(angleAt(p));
+      /*
+         The turn, scrubbed rather than played.
 
-      for (let i = 0; i < frames.length; i++) {
-        const frame = frames[i]!;
-        let delta = frame.angle - angle;
-        if (delta > 180) delta -= 360;
-        if (delta < -180) delta += 360;
+         The whole scroll range maps linearly onto the whole clip, so every
+         frame the camera shot is reachable and the garment completes exactly
+         one revolution across the film — no easing table in between, because
+         any curve here would make the turntable speed up and slow down
+         against footage that was shot at a constant rate.
 
-        const next = frames[(i + 1) % frames.length]!;
-        const prev = frames[(i - 1 + frames.length) % frames.length]!;
-        const gap = Math.max(
-          normalise(next.angle - frame.angle),
-          normalise(frame.angle - prev.angle),
-        );
+         Nothing calls `play()`: the video only ever advances because the page
+         moved, so scrolling up runs the turn backwards and stopping leaves it
+         on the exact frame it reached. `smoothed` still chases the scrollbar,
+         so the turn keeps going for a beat after the wheel stops and settles
+         with the same inertia as everything else on the stage.
 
-        const t = Math.min(1, Math.abs(delta) / gap);
-        const ramp = Math.min(
-          1,
-          Math.max(0, (t - BLEND_START) / (BLEND_END - BLEND_START)),
-        );
-        const opacity = 1 - ramp * ramp * (3 - 2 * ramp);
+         Two guards keep the scrub smooth rather than stuttering:
 
-        /*
-           Real rotation, not a slideshow.
+         - Seeking while a previous seek is still in flight makes the decoder
+           abandon work it has already started, which is what turns a fast
+           scroll into a slideshow. Waiting for `seeking` to clear issues
+           exactly one seek per decode, as fast as the decoder can retire them.
+         - `duration` is NaN until metadata loads, and writing NaN to
+           `currentTime` throws.
+      */
+      seekTarget = Math.min(Math.max(p, 0), 1);
+      pump();
 
-           Each frame is turned about the vertical axis in proportion to how far
-           the camera has moved past it, inside a parent carrying perspective.
-           A frame being turned away from leans back and foreshortens exactly as
-           a solid object would, while the incoming frame swings in to meet it.
-           With the crossfade on top, the handover reads as one object rotating
-           rather than two photographs being exchanged — which is the whole
-           difference between this and a gallery.
+      /*
+         Sub-frame interpolation, written every rAF turn.
 
-           Mirrored frames negate the rotation as well as the scale, or they
-           would lean the wrong way.
-        */
-        const facing = frame.mirrored ? -1 : 1;
-        const rotateY = Math.max(-40, Math.min(40, delta * ROTATION_DEPTH));
-        const shift = Math.max(-14, Math.min(14, -delta * 0.16));
-
-        const el = frameRefs.current[i];
-        if (el) {
-          el.style.opacity = opacity.toFixed(3);
-          el.style.transform = `translate3d(${shift.toFixed(1)}px,0,0) rotateY(${(rotateY * facing).toFixed(2)}deg) scaleX(${facing})`;
-        }
+         The residual is how much of the turn the scroll has asked for but the
+         decoder has not delivered yet. Expressing it as a small horizontal
+         glide means the garment keeps moving on frames where no new video
+         frame arrived, and snaps back to zero the moment one does — the two
+         together read as one continuous rotation rather than a series of
+         held stills. Transform only, on an already-promoted layer, so this
+         costs a composite and never a repaint.
+      */
+      const glideVideo = videoRef.current;
+      if (glideVideo && glideVideo.duration > 0) {
+        const residualFrames =
+          (seekTarget * glideVideo.duration - glideVideo.currentTime) / FRAME_STEP;
+        const glide =
+          Math.max(-1, Math.min(1, residualFrames / MAX_SEEK_FRAMES)) * SUBFRAME_GLIDE_PX;
+        glideVideo.style.transform = `translate3d(${glide.toFixed(2)}px,0,0)`;
       }
+
       raf = requestAnimationFrame(tick);
     };
 
@@ -366,6 +469,11 @@ function FilmLive({ product }: { product: Product }) {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("pointermove", onPointerMove);
+      videoEl?.removeEventListener("seeked", onSeeked);
+      videoEl?.removeEventListener("error", onSeeked);
+      if (frameHandle) {
+        (videoEl as FrameCallbackVideo | null)?.cancelVideoFrameCallback?.(frameHandle);
+      }
     };
   }, [scrollYProgress]);
 
@@ -403,30 +511,56 @@ function FilmLive({ product }: { product: Product }) {
           style={{ opacity: 0 }}
           className="absolute inset-0 flex items-center justify-center will-change-[opacity,transform]"
         >
-          {/* Perspective lives here so the frames inside can genuinely rotate
-              in depth rather than just squash horizontally. */}
-          <div
-            className="relative h-[78svh] w-[78svh] max-w-[92vw]"
-            style={{ perspective: "1600px", transformStyle: "preserve-3d" }}
-          >
-            {millionaireSetTurnaroundCutout.frames.map((frame, index) => (
-              <div
-                key={`${frame.angle}-${frame.mirrored}`}
-                ref={(node) => {
-                  frameRefs.current[index] = node;
-                }}
-                className="absolute inset-0 will-change-[opacity,transform]"
-                style={{ opacity: index === 0 ? 1 : 0 }}
-              >
-                <Image
-                  src={frame.src}
-                  alt={index === 0 ? millionaireSetTurnaroundCutout.alt : ""}
-                  priority={index < 2}
-                  sizes="(max-width: 768px) 92vw, 78vh"
-                  className="h-full w-full object-contain"
-                />
-              </div>
-            ))}
+          {/* Same box the frame stack occupied — position and scale on this
+              stage are unchanged, only its contents are. */}
+          {/* `overflow-visible` is explicit: the filter region now reaches
+              well past the element so the feather can resolve, and anything
+              clipping back to the box would reinstate the edge it exists to
+              remove. */}
+          <div className="relative h-[78svh] w-[78svh] max-w-[92vw] overflow-visible">
+            <StudioKeyFilter />
+            {/*
+               The clip runs at its own brightness and colour. The backdrop is
+               keyed out by alpha, not hidden by grading — see StudioKeyFilter.
+
+               `translateZ(0)` and `will-change: transform` promote this to its
+               own compositor layer, so a decoded frame is uploaded straight to
+               the GPU and the page around it is never repainted to show it.
+            */}
+            <video
+              ref={videoRef}
+              src={TURNTABLE_SRC}
+              muted
+              playsInline
+              preload="auto"
+              aria-label={millionaireSetTurnaroundCutout.alt}
+              className="h-full w-full object-cover"
+              style={{
+                filter: `url(#${KEY_FILTER_ID})`,
+                transform: "translateZ(0)",
+                willChange: "transform",
+                backfaceVisibility: "hidden",
+                /*
+                   Edge falloff, not a vignette.
+
+                   The key cannot guarantee that every pixel along the clip's
+                   own border resolves to zero alpha — the cyclorama vignettes
+                   as it approaches the frame edge, and wherever it drifts out
+                   of the transparent band it survives as a hairline and reads
+                   as a box around the video. This drops alpha over the
+                   outermost 3%, which on this framing contains nothing but
+                   backdrop: the figure occupies the middle quarter of the
+                   frame and is never touched. It removes the boundary rather
+                   than shading it, so there is no mask edge to see.
+                */
+                maskImage:
+                  "linear-gradient(to right, transparent 0, #000 3%, #000 97%, transparent 100%), linear-gradient(to bottom, transparent 0, #000 3%, #000 97%, transparent 100%)",
+                WebkitMaskImage:
+                  "linear-gradient(to right, transparent 0, #000 3%, #000 97%, transparent 100%), linear-gradient(to bottom, transparent 0, #000 3%, #000 97%, transparent 100%)",
+                maskComposite: "intersect",
+                WebkitMaskComposite: "source-in",
+              }}
+            />
           </div>
         </div>
 
@@ -447,6 +581,125 @@ function FilmLive({ product }: { product: Product }) {
         <PurchasePanel product={product} ref={purchaseRef} />
       </div>
     </section>
+  );
+}
+
+/**
+ * Background key for the turntable clip.
+ *
+ * A real alpha matte, not a brightness trick: the clip's own colour comes
+ * through untouched and only the alpha channel is rewritten.
+ *
+ * The obvious approach — treat everything bright as background — is the one
+ * thing that cannot work here, and `scripts/extract-cutouts.mjs` documents
+ * why: the chest wordmark and thigh crest are the brightest pixels in frame,
+ * so a one-sided luminance key deletes exactly the branding the garment
+ * exists to carry.
+ *
+ * So the key is two-sided. Luminance goes into alpha, then a lookup table
+ * makes only the *middle* of the range transparent: the near-black garment
+ * stays opaque at the bottom of the scale, the silver prints stay opaque at
+ * the top, and the cyclorama — which sits between them and nowhere near
+ * either — is what drops out. The ramps between bands are what leave a soft,
+ * anti-aliased edge instead of a cut-out's hard one.
+ *
+ * `colorInterpolationFilters="sRGB"` is not optional. The filter default is
+ * linearRGB, which would silently shift every colour in the clip on its way
+ * through — the exact opposite of leaving the footage alone.
+ *
+ * **The garment itself is never filtered.** Everything below builds an alpha
+ * matte and nothing else; the final `feComposite operator="in"` reads colour
+ * from the untouched `SourceGraphic` and takes only the *alpha* of the matte.
+ * That is what lets the silhouette edge be feathered while the weave, the
+ * seams and the print stay exactly as sharp as the footage is — softening the
+ * matte cannot soften the pixels inside it.
+ *
+ * The filter region is deliberately generous. A region that ends near the
+ * element's own edge truncates the feather blur exactly at the frame boundary,
+ * and a truncated ramp is a hard line — the thin rectangle that gave the clip
+ * away as a video sitting on the page rather than a garment standing in it.
+ * The margin costs a slightly larger buffer and removes the seam outright.
+ */
+function StudioKeyFilter() {
+  return (
+    <svg aria-hidden="true" className="pointer-events-none absolute h-0 w-0">
+      <defs>
+        <filter
+          id={KEY_FILTER_ID}
+          colorInterpolationFilters="sRGB"
+          x="-15%"
+          y="-15%"
+          width="130%"
+          height="130%"
+        >
+          {/* Colour rows are identity; the alpha row becomes luminance. */}
+          <feColorMatrix
+            type="matrix"
+            values="1 0 0 0 0
+                    0 1 0 0 0
+                    0 0 1 0 0
+                    0.2126 0.7152 0.0722 0 0"
+            result="luma"
+          />
+          {/*
+            Alpha by luminance band, sampled at seventeen evenly spaced stops
+            so each step is 0.0625 rather than 0.125.
+
+            The top of the range carries the branding, and it has to be *fully*
+            opaque rather than merely on its way there. Ending the ramp at 1.0
+            meant the chest wordmark sat around alpha 0.4 — printed white in
+            the footage, but composited 60% onto a black page, which is
+            precisely why it read as grey rather than white. The opaque band now
+            closes at 0.9375, so anything near-white is solid: the wordmark and
+            the crest come through at the white they were shot at.
+
+            The lit floor sits at roughly 0.76 and stays comfortably inside the
+            transparent band, so buying the prints back costs nothing there.
+
+            The bottom of the range is unchanged and deliberately tight: the
+            garment's own highlights reach roughly 0.20, so the opaque band
+            cannot extend past 0.25 without the cyclorama starting to stick.
+          */}
+          <feComponentTransfer in="luma" result="keyed">
+            <feFuncA type="table" tableValues="1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 1 1" />
+          </feComponentTransfer>
+
+          {/*
+            Feather, on the matte alone.
+
+            A key built from a luminance threshold steps between opaque and
+            transparent within a pixel or two, which is what reads as a ragged
+            silhouette. A sub-pixel blur turns that step into a ramp — the
+            same soft edge a real matte has.
+          */}
+          {/*
+            0.5, and not a fraction more, for a measured reason: at
+            stdDeviation 0.5 this blur costs about 27ms per decoded frame, and
+            at 1.1 it costs 580ms — the radius crosses a threshold where the
+            compositor stops taking the fast path and the whole scrub collapses
+            to roughly one frame a second. Half a pixel is enough to turn the
+            key's hard step into a ramp; anything more buys a softness nobody
+            can see at the price of the motion itself.
+          */}
+          <feGaussianBlur in="keyed" stdDeviation="0.5" result="feathered" />
+
+          {/*
+            Blurring a matte also spreads it outward, and the pixels it spreads
+            onto are cyclorama — which would ring the garment in a pale halo,
+            the classic tell of a bad cutout. Re-steepening the ramp and
+            biasing it low pulls the matte back inside the silhouette: the
+            edge stays soft, but the feather eats into the garment rather than
+            out into the background it was cut from.
+          */}
+          <feComponentTransfer in="feathered" result="matte">
+            <feFuncA type="table" tableValues="0 0.08 0.45 0.82 1" />
+          </feComponentTransfer>
+
+          {/* Untouched pixels, matte alpha. */}
+          <feComposite in="SourceGraphic" in2="matte" operator="in" />
+        </filter>
+      </defs>
+    </svg>
   );
 }
 

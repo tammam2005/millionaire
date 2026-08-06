@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
+import { GarmentPlate } from "@/components/product/GarmentPlate";
 import { Overline } from "@/components/ui/Overline";
 import { commerce } from "@/lib/commerce";
 import { cn } from "@/lib/utils/cn";
@@ -45,23 +45,23 @@ export default async function CollectionsPage() {
             data-cursor-magnetic
             className="group grid items-center gap-10 py-16 lg:grid-cols-2 lg:gap-20"
           >
-            <div
-              className={cn(
-                "bg-studio aspect-[4/3] overflow-hidden",
-                index % 2 === 1 ? "lg:order-2" : "",
-              )}
-            >
-              {cover ? (
-                <Image
-                  src={cover.media.primary}
-                  alt=""
-                  placeholder="blur"
-                  priority={index === 0}
-                  sizes="(min-width: 1024px) 50vw, 100vw"
-                  className="h-full w-full object-cover transition-transform duration-(--duration-scene) ease-(--ease-signature) group-hover:scale-[1.03]"
-                />
-              ) : null}
-            </div>
+            {cover ? (
+              <GarmentPlate
+                src={cover.media.cutout ?? cover.media.primary}
+                alt=""
+                priority={index === 0}
+                sizes="(min-width: 1024px) 50vw, 100vw"
+                className={cn("aspect-[4/3]", index % 2 === 1 ? "lg:order-2" : "")}
+                imageClassName="h-full w-full object-cover transition-transform duration-(--duration-scene) ease-(--ease-signature) group-hover:scale-[1.03]"
+              />
+            ) : (
+              <div
+                className={cn(
+                  "bg-studio-void aspect-[4/3]",
+                  index % 2 === 1 ? "lg:order-2" : "",
+                )}
+              />
+            )}
 
             <div>
               <Overline tone="silver">

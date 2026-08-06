@@ -44,7 +44,7 @@ export function useResolvedLines(): readonly ResolvedCartLine[] {
     const product = products.find((candidate) => candidate.id === line.productId);
     return {
       ...line,
-      image: product?.media.primary ?? null,
+      image: product?.media.cutout ?? product?.media.primary ?? null,
       stillAvailable: product !== undefined,
     };
   });

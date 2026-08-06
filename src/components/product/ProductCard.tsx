@@ -1,5 +1,5 @@
-import Image from "next/image";
 import Link from "next/link";
+import { GarmentPlate } from "@/components/product/GarmentPlate";
 import { Overline } from "@/components/ui/Overline";
 import type { Product, ProductStatus } from "@/lib/commerce";
 import { formatMoney } from "@/lib/commerce";
@@ -29,8 +29,8 @@ const STATUS_LABEL: Partial<Record<ProductStatus, string>> = {
  * (the header's Monogram condense is the same trick). No shadow, no radius,
  * no lift — those read as generic ecommerce chrome on a brand that withholds.
  *
- * Renders don't need cropping: every primary image is a 1024×1024 studio
- * plate from the same shoot, so `aspect-square` never fights the source.
+ * Renders don't need cropping: every render is a 1024×1024 plate from the
+ * same shoot, so `aspect-square` never fights the source.
  */
 export function ProductCard({ product, status, priority, className }: ProductCardProps) {
   const statusLabel = STATUS_LABEL[status];
@@ -41,16 +41,14 @@ export function ProductCard({ product, status, priority, className }: ProductCar
       data-cursor-magnetic
       className={cn("group flex flex-col", className)}
     >
-      <div className="bg-studio aspect-square overflow-hidden">
-        <Image
-          src={product.media.primary}
-          alt={product.title}
-          placeholder="blur"
-          priority={priority}
-          sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
-          className="h-full w-full object-cover transition-transform duration-(--duration-element) ease-(--ease-signature) group-hover:scale-[1.035]"
-        />
-      </div>
+      <GarmentPlate
+        src={product.media.cutout ?? product.media.primary}
+        alt={product.title}
+        priority={priority}
+        sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+        className="aspect-square"
+        imageClassName="h-full w-full object-cover transition-transform duration-(--duration-element) ease-(--ease-signature) group-hover:scale-[1.035]"
+      />
 
       <Overline tone="silver" className="mt-6">
         {product.overline}

@@ -90,14 +90,14 @@ export function CartDrawer({ open, onOpenChange }: CartDrawerProps) {
                   <ul className="flex-1 divide-y divide-graphite overflow-y-auto px-8">
                     {lines.map((line) => (
                       <li key={line.variantId} className="flex gap-5 py-7">
-                        <div className="bg-studio shrink-0">
+                        <div className="bg-studio-void shrink-0">
                           {line.image ? (
                             <Image
                               src={line.image}
                               alt=""
                               width={88}
                               height={88}
-                              className="h-22 w-22 object-cover"
+                              className="h-22 w-22 object-cover drop-shadow-[0_0_2px_rgba(255,255,255,0.06)]"
                             />
                           ) : (
                             <div className="h-22 w-22" />
