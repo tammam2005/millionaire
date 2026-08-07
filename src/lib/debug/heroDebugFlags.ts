@@ -29,6 +29,20 @@ export type HeroDebugFlags = {
   scrim: boolean;
   keyFilter: boolean;
   voidBlack: boolean;
+  /** The video's CSS `mask`/`-webkit-mask-composite` edge falloff. */
+  mask: boolean;
+  /** `translateZ(0)` + `will-change: transform` + `backface-visibility: hidden` on the video. */
+  gpuHints: boolean;
+  /** The per-rAF-tick `video.style.transform` rewrite (sub-frame glide). */
+  subframeGlide: boolean;
+  /** The pointer-driven micro-parallax term added into the figure's transform. */
+  cameraDrift: boolean;
+  /** `position: sticky` on the stage container (false → `relative`). */
+  sticky: boolean;
+  /** `overflow: hidden` on the stage container (false → `visible`). */
+  overflowHidden: boolean;
+  /** `backdrop-filter: blur()` on the purchase panel. */
+  backdropBlur: boolean;
 };
 
 const DEFAULTS: HeroDebugFlags = {
@@ -37,6 +51,13 @@ const DEFAULTS: HeroDebugFlags = {
   scrim: true,
   keyFilter: true,
   voidBlack: false,
+  mask: true,
+  gpuHints: true,
+  subframeGlide: true,
+  cameraDrift: true,
+  sticky: true,
+  overflowHidden: true,
+  backdropBlur: true,
 };
 
 /** Flags-object key -> URL query param name. */
@@ -46,6 +67,13 @@ const PARAM_NAMES: Record<keyof HeroDebugFlags, string> = {
   scrim: "scrim",
   keyFilter: "keyfilter",
   voidBlack: "voidblack",
+  mask: "mask",
+  gpuHints: "gpuhints",
+  subframeGlide: "glide",
+  cameraDrift: "camera",
+  sticky: "sticky",
+  overflowHidden: "overflow",
+  backdropBlur: "backdrop",
 };
 
 const EVENT = "herodebug:change";

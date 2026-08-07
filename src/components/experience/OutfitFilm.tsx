@@ -325,9 +325,21 @@ function FilmLive({ product }: { product: Product }) {
     scrim: true,
     keyFilter: true,
     voidBlack: false,
+    mask: true,
+    gpuHints: true,
+    subframeGlide: true,
+    cameraDrift: true,
+    sticky: true,
+    overflowHidden: true,
+    backdropBlur: true,
   }));
+  const debugFlagsRef = useRef(debugFlags);
   useEffect(() => {
-    const sync = () => setDebugFlags(readHeroDebugFlags());
+    const sync = () => {
+      const next = readHeroDebugFlags();
+      debugFlagsRef.current = next;
+      setDebugFlags(next);
+    };
     sync();
     return subscribeHeroDebug(sync);
   }, []);
@@ -474,18 +486,23 @@ function FilmLive({ product }: { product: Product }) {
       camera.x += (camera.tx - camera.x) * 0.045;
       camera.y += (camera.ty - camera.y) * 0.045;
       const p = smoothed;
+      // Temporary — see `heroDebugFlags.ts`. Zeroes only the drift term;
+      // the essential FIG_X/FIG_SCALE/WORD_SCALE choreography below still
+      // writes every tick regardless, same as production.
+      const driftX = debugFlagsRef.current.cameraDrift ? camera.x : 0;
+      const driftY = debugFlagsRef.current.cameraDrift ? camera.y : 0;
 
       if (wordRef.current) {
         wordRef.current.style.opacity = stopsAt(p, WORD_OPACITY).toFixed(3);
         // The wordmark takes the camera at half strength, the figure at full —
         // the difference is what separates them in depth during the morph.
-        wordRef.current.style.transform = `translate3d(${(camera.x * 0.6).toFixed(2)}%, ${(camera.y * 0.4).toFixed(2)}%, 0) scale(${stopsAt(p, WORD_SCALE).toFixed(4)})`;
+        wordRef.current.style.transform = `translate3d(${(driftX * 0.6).toFixed(2)}%, ${(driftY * 0.4).toFixed(2)}%, 0) scale(${stopsAt(p, WORD_SCALE).toFixed(4)})`;
         wordRef.current.style.filter = `blur(${stopsAt(p, WORD_BLUR).toFixed(2)}px)`;
       }
 
       if (figureRef.current) {
         figureRef.current.style.opacity = stopsAt(p, FIG_OPACITY).toFixed(3);
-        figureRef.current.style.transform = `translate3d(${(stopsAt(p, FIG_X) + camera.x * 1.1).toFixed(2)}%, ${(camera.y * 0.7).toFixed(2)}%, 0) scale(${stopsAt(p, FIG_SCALE).toFixed(4)})`;
+        figureRef.current.style.transform = `translate3d(${(stopsAt(p, FIG_X) + driftX * 1.1).toFixed(2)}%, ${(driftY * 0.7).toFixed(2)}%, 0) scale(${stopsAt(p, FIG_SCALE).toFixed(4)})`;
       }
 
       // Chapter copy: fade up on arrival, hold, fade out as the next begins.
@@ -557,12 +574,19 @@ function FilmLive({ product }: { product: Product }) {
       */
       const glideVideo = videoRef.current;
       if (glideVideo && glideVideo.duration > 0) {
-        const residualFrames =
-          (seekTarget * glideVideo.duration - glideVideo.currentTime) / FRAME_STEP;
-        const glide =
-          Math.max(-1, Math.min(1, residualFrames / GLIDE_NORMALIZE_FRAMES)) *
-          SUBFRAME_GLIDE_PX;
-        glideVideo.style.transform = `translate3d(${glide.toFixed(2)}px,0,0)`;
+        // Temporary — see `heroDebugFlags.ts`. Off resets to the static base
+        // transform instead of leaving whatever glide value was last written,
+        // so the comparison is clean rather than frozen mid-drift.
+        if (debugFlagsRef.current.subframeGlide) {
+          const residualFrames =
+            (seekTarget * glideVideo.duration - glideVideo.currentTime) / FRAME_STEP;
+          const glide =
+            Math.max(-1, Math.min(1, residualFrames / GLIDE_NORMALIZE_FRAMES)) *
+            SUBFRAME_GLIDE_PX;
+          glideVideo.style.transform = `translate3d(${glide.toFixed(2)}px,0,0)`;
+        } else {
+          glideVideo.style.transform = debugFlagsRef.current.gpuHints ? "translateZ(0)" : "";
+        }
       }
 
       raf = requestAnimationFrame(tick);
@@ -591,7 +615,15 @@ function FilmLive({ product }: { product: Product }) {
       }}
       aria-label="The MILLIONAIRE hooded set"
     >
-      <div className="sticky top-0 h-svh overflow-hidden">
+      {/* Temporary — see `heroDebugFlags.ts` — the sticky/overflow classes
+          below are conditional only for that reason. */}
+      <div
+        className={[
+          "top-0 h-svh",
+          debugFlags.sticky ? "sticky" : "relative",
+          debugFlags.overflowHidden ? "overflow-hidden" : "overflow-visible",
+        ].join(" ")}
+      >
         {debugFlags.spotlight && (
           <Spotlight
             className="top-[4%] left-1/2 h-[80svh] w-[80svh] -translate-x-1/2"
@@ -718,9 +750,10 @@ function FilmLive({ product }: { product: Product }) {
               className="absolute top-[3%] left-[3%] h-[94%] w-[94%] object-cover"
               style={{
                 filter: filterActive ? `url(#${KEY_FILTER_ID})` : undefined,
-                transform: "translateZ(0)",
-                willChange: "transform",
-                backfaceVisibility: "hidden",
+                // Temporary — see `heroDebugFlags.ts`.
+                ...(debugFlags.gpuHints
+                  ? { transform: "translateZ(0)", willChange: "transform", backfaceVisibility: "hidden" as const }
+                  : {}),
                 /*
                    Edge falloff, not a vignette.
 
@@ -734,12 +767,16 @@ function FilmLive({ product }: { product: Product }) {
                    frame and is never touched. It removes the boundary rather
                    than shading it, so there is no mask edge to see.
                 */
-                maskImage:
-                  "linear-gradient(to right, transparent 0, #000 3%, #000 97%, transparent 100%), linear-gradient(to bottom, transparent 0, #000 3%, #000 97%, transparent 100%)",
-                WebkitMaskImage:
-                  "linear-gradient(to right, transparent 0, #000 3%, #000 97%, transparent 100%), linear-gradient(to bottom, transparent 0, #000 3%, #000 97%, transparent 100%)",
-                maskComposite: "intersect",
-                WebkitMaskComposite: "source-in",
+                ...(debugFlags.mask
+                  ? {
+                      maskImage:
+                        "linear-gradient(to right, transparent 0, #000 3%, #000 97%, transparent 100%), linear-gradient(to bottom, transparent 0, #000 3%, #000 97%, transparent 100%)",
+                      WebkitMaskImage:
+                        "linear-gradient(to right, transparent 0, #000 3%, #000 97%, transparent 100%), linear-gradient(to bottom, transparent 0, #000 3%, #000 97%, transparent 100%)",
+                      maskComposite: "intersect" as const,
+                      WebkitMaskComposite: "source-in",
+                    }
+                  : {}),
               }}
             >
               {/* Ordered by preference — the browser plays the first it
@@ -765,7 +802,7 @@ function FilmLive({ product }: { product: Product }) {
         ))}
 
         {/* Final chapter — the only thing for sale. */}
-        <PurchasePanel product={product} ref={purchaseRef} />
+        <PurchasePanel product={product} ref={purchaseRef} backdropBlur={debugFlags.backdropBlur} />
       </div>
     </section>
   );
@@ -1143,9 +1180,12 @@ function ChapterPanel({
 function PurchasePanel({
   product,
   ref,
+  backdropBlur,
 }: {
   product: Product;
   ref: React.Ref<HTMLDivElement>;
+  /** Temporary — see `heroDebugFlags.ts`. */
+  backdropBlur: boolean;
 }) {
   return (
     <div
@@ -1154,7 +1194,9 @@ function PurchasePanel({
       style={{ opacity: 0, pointerEvents: "none" }}
       className="absolute inset-x-0 bottom-0 px-(--spacing-gutter) pb-[6svh] will-change-[opacity,transform]"
     >
-      <div className="mx-auto max-w-[1600px] bg-void/70 backdrop-blur-md">
+      <div
+        className={`mx-auto max-w-[1600px] bg-void/70 ${backdropBlur ? "backdrop-blur-md" : ""}`}
+      >
         <div className="flex flex-col gap-8 border-t border-line pt-8 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <Overline tone="silver">The complete set</Overline>

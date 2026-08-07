@@ -42,6 +42,41 @@ const ROWS: { key: keyof HeroDebugFlags; label: string; hint: string }[] = [
     label: "Background texture (void colour)",
     hint: "Swaps the page's near-black background from its token colour (#08080a) to literal pure black.",
   },
+  {
+    key: "mask",
+    label: "Video CSS mask",
+    hint: "The edge-falloff mask (mask-composite:intersect + -webkit-mask-composite:source-in — different keyword systems on the same element). Off removes the mask entirely.",
+  },
+  {
+    key: "gpuHints",
+    label: "Video GPU hints",
+    hint: "translateZ(0) + will-change:transform + backface-visibility:hidden on the video element.",
+  },
+  {
+    key: "subframeGlide",
+    label: "Sub-frame glide",
+    hint: "The per-frame video.style.transform rewrite used for sub-pixel smoothing between decoded frames. Off leaves the video's transform static after mount.",
+  },
+  {
+    key: "cameraDrift",
+    label: "Camera drift",
+    hint: "The pointer-driven micro-parallax term added into the figure's transform every tick. Off keeps the core scroll choreography but removes the added drift.",
+  },
+  {
+    key: "sticky",
+    label: "Sticky stage",
+    hint: "position:sticky on the stage container. Off switches it to position:relative (the stage will scroll normally instead of pinning).",
+  },
+  {
+    key: "overflowHidden",
+    label: "Stage overflow:hidden",
+    hint: "Off switches the stage container to overflow:visible.",
+  },
+  {
+    key: "backdropBlur",
+    label: "Purchase panel backdrop-blur",
+    hint: "backdrop-filter:blur() on the purchase panel that arrives at the end of the film — a sibling within the same stage, not the video itself.",
+  },
 ];
 
 export function HeroDebugPanel() {
@@ -67,6 +102,8 @@ export function HeroDebugPanel() {
         left: 12,
         zIndex: 999999,
         maxWidth: 300,
+        maxHeight: "80svh",
+        overflowY: "auto",
         borderRadius: 10,
         border: "1px solid rgba(255,255,255,0.25)",
         background: "rgba(0,0,0,0.88)",
