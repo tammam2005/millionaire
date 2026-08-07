@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Film grain.
  *
@@ -16,9 +18,16 @@
  * sliding texture. Real grain jumps, so the movement is quantised to 6 discrete
  * frames — the difference between film and a moving pattern.
  *
- * A server component: it has no state and no interactivity, so it ships as
- * markup with no JavaScript at all.
+ * Was a server component — no state, no interactivity, shipped as markup with
+ * no JavaScript at all. Temporarily a client component instead, only to read
+ * the hero debug flag below (see `heroDebugFlags.ts`); revert this back once
+ * that's deleted. `visible` defaults to `true`, matching the previous
+ * unconditional render exactly, so a normal visit — anything without
+ * `?debugHero=1` — is unaffected.
  */
+
+import { useEffect, useState } from "react";
+import { readHeroDebugFlags, subscribeHeroDebug } from "@/lib/debug/heroDebugFlags";
 
 /** Fractal noise, generated once by the browser's SVG filter, then reused. */
 const NOISE = `data:image/svg+xml;utf8,${encodeURIComponent(
@@ -32,6 +41,16 @@ const NOISE = `data:image/svg+xml;utf8,${encodeURIComponent(
 )}`;
 
 export function Grain() {
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    const sync = () => setVisible(readHeroDebugFlags().grain);
+    sync();
+    return subscribeHeroDebug(sync);
+  }, []);
+
+  if (!visible) return null;
+
   return (
     <div
       aria-hidden="true"

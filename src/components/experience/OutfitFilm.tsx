@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { AddToBag } from "@/components/product/AddToBag";
 import { Spotlight } from "@/components/experience/Spotlight";
 import { Overline } from "@/components/ui/Overline";
+import type { HeroDebugFlags } from "@/lib/debug/heroDebugFlags";
+import { readHeroDebugFlags, subscribeHeroDebug } from "@/lib/debug/heroDebugFlags";
 import type { Product } from "@/lib/commerce";
 import { formatMoney } from "@/lib/commerce";
 import { millionaireSetTurnaroundCutout } from "@/lib/media/assets";
@@ -316,6 +318,21 @@ function FilmLive({ product }: { product: Product }) {
     return () => video.removeEventListener("loadedmetadata", detectSource);
   }, []);
 
+  /** Temporary — see `heroDebugFlags.ts`. Delete with the rest of it. */
+  const [debugFlags, setDebugFlags] = useState<HeroDebugFlags>(() => ({
+    spotlight: true,
+    grain: true,
+    scrim: true,
+    keyFilter: true,
+    voidBlack: false,
+  }));
+  useEffect(() => {
+    const sync = () => setDebugFlags(readHeroDebugFlags());
+    sync();
+    return subscribeHeroDebug(sync);
+  }, []);
+  const filterActive = needsKeyFilter && debugFlags.keyFilter;
+
   /**
    * One silent play/pause to unstick WebKit's decoder.
    *
@@ -567,21 +584,29 @@ function FilmLive({ product }: { product: Product }) {
     <section
       ref={sectionRef}
       className="relative bg-void"
-      style={{ height: "760svh" }}
+      style={{
+        height: "760svh",
+        // Temporary — see `heroDebugFlags.ts`.
+        backgroundColor: debugFlags.voidBlack ? "#000000" : undefined,
+      }}
       aria-label="The MILLIONAIRE hooded set"
     >
       <div className="sticky top-0 h-svh overflow-hidden">
-        <Spotlight
-          className="top-[4%] left-1/2 h-[80svh] w-[80svh] -translate-x-1/2"
-          alwaysAnimate
-        />
+        {debugFlags.spotlight && (
+          <Spotlight
+            className="top-[4%] left-1/2 h-[80svh] w-[80svh] -translate-x-1/2"
+            alwaysAnimate
+          />
+        )}
 
         {/* Scrim under the chapter copy on narrow screens, where the type sits
             over the garment rather than beside it. Absent from lg up. */}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-[62svh] bg-gradient-to-t from-[#08080a] via-[#08080a]/88 to-transparent lg:hidden"
-        />
+        {debugFlags.scrim && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-[62svh] bg-gradient-to-t from-[#08080a] via-[#08080a]/88 to-transparent lg:hidden"
+          />
+        )}
 
         {/* The opening frame: the wordmark, alone. */}
         <div
@@ -692,7 +717,7 @@ function FilmLive({ product }: { product: Product }) {
               aria-label={millionaireSetTurnaroundCutout.alt}
               className="absolute top-[3%] left-[3%] h-[94%] w-[94%] object-cover"
               style={{
-                filter: needsKeyFilter ? `url(#${KEY_FILTER_ID})` : undefined,
+                filter: filterActive ? `url(#${KEY_FILTER_ID})` : undefined,
                 transform: "translateZ(0)",
                 willChange: "transform",
                 backfaceVisibility: "hidden",

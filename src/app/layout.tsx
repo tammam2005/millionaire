@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { CartHydrator } from "@/components/experience/CartHydrator";
 import { Cursor } from "@/components/experience/Cursor";
 import { Grain } from "@/components/experience/Grain";
+import { HeroDebugPanel } from "@/components/experience/HeroDebugPanel";
 import { Preloader } from "@/components/experience/Preloader";
 import { SmoothScroll } from "@/components/experience/SmoothScroll";
 import { fontVariables } from "@/lib/fonts";
@@ -100,6 +101,9 @@ export default function RootLayout({
         <Grain />
         <Preloader />
         <CartHydrator />
+        {/* Temporary — see heroDebugFlags.ts. Renders nothing without
+            ?debugHero=1 in the URL. */}
+        <HeroDebugPanel />
         {children}
       </body>
     </html>
