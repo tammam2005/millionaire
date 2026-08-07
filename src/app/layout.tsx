@@ -1,10 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { CartHydrator } from "@/components/experience/CartHydrator";
-import { Cursor } from "@/components/experience/Cursor";
-import { Grain } from "@/components/experience/Grain";
-import { HeroDebugPanel } from "@/components/experience/HeroDebugPanel";
-import { Preloader } from "@/components/experience/Preloader";
-import { SmoothScroll } from "@/components/experience/SmoothScroll";
+import { GlobalChrome } from "@/components/experience/GlobalChrome";
 import { fontVariables } from "@/lib/fonts";
 import "./globals.css";
 
@@ -93,17 +88,7 @@ export default function RootLayout({
         </noscript>
       </head>
       <body className="flex min-h-full flex-col">
-        {/* Each of these mounts as a no-op where it shouldn't run — coarse
-            pointers, reduced motion, a session that has already seen the
-            intro — so callers never branch on device or preference. */}
-        <SmoothScroll />
-        <Cursor />
-        <Grain />
-        <Preloader />
-        <CartHydrator />
-        {/* Temporary — see heroDebugFlags.ts. Renders nothing without
-            ?debugHero=1 in the URL. */}
-        <HeroDebugPanel />
+        <GlobalChrome />
         {children}
       </body>
     </html>
