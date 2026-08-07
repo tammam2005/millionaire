@@ -309,3 +309,30 @@ html[data-preloader="done"] [data-preloader-overlay] {
   text-transform: uppercase;
   line-height: 1.05;
 }
+
+/* ==========================================================================
+   Safari: neutralise the grain's blend mode.
+
+   `[data-grain]` (Grain.tsx) sits `mix-blend-mode: overlay` over the entire
+   page at 5.5% opacity, to keep large black fields from banding. `overlay`
+   is contrast-dependent blending, and WebKit's implementation of it has a
+   real history of diverging from Chromium's — most visibly as the whole page
+   reading lighter and flatter than it should, since the effect sits above
+   everything, including the void ground behind the hero.
+
+   `mix-blend-mode: normal` is ordinary alpha compositing: no blend-mode math
+   for an engine to disagree about, so it is the safe target rather than a
+   guess at matching Safari's overlay curve. At 5.5% opacity the character
+   difference between "overlay" and "normal" grain is not something either
+   version is legible enough to show on its own.
+
+   `@supports (-webkit-touch-callout: none)` is the standard WebKit feature
+   query — `-webkit-touch-callout` is recognised only there, on both iOS and
+   macOS Safari, and by no other engine — so this reaches exactly the browser
+   the divergence is in without a user-agent string.
+   ========================================================================== */
+@supports (-webkit-touch-callout: none) {
+  [data-grain] {
+    mix-blend-mode: normal;
+  }
+}

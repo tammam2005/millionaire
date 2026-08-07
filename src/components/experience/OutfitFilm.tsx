@@ -775,6 +775,15 @@ function FilmLive({ product }: { product: Product }) {
  * `colorInterpolationFilters="sRGB"` is not optional on either branch. The
  * filter default is linearRGB, which would silently shift every colour in the
  * clip on its way through — the exact opposite of leaving the footage alone.
+ * Set on the `<filter>` element it should cascade to every primitive inside,
+ * but WebKit has a known history of not reliably inheriting this property to
+ * every primitive type — a gap that reads as exactly this: the same filter
+ * graph coming out lighter and lower-contrast in Safari than in Chromium,
+ * because whichever primitive falls back to linearRGB blends the alpha/colour
+ * math in a space where mid-tones sit brighter than their sRGB values. So it
+ * is repeated explicitly on every primitive below rather than left to
+ * inherit — free and inert wherever inheritance already worked, a real fix
+ * wherever it did not.
  *
  * The filter region is deliberately generous. A region that ends near the
  * element's own edge truncates the feather blur exactly at the frame boundary,
@@ -796,6 +805,7 @@ function StudioKeyFilter() {
         >
           {/* Colour rows are identity; the alpha row becomes luminance. */}
           <feColorMatrix
+            colorInterpolationFilters="sRGB"
             type="matrix"
             values="1 0 0 0 0
                     0 1 0 0 0
@@ -832,7 +842,7 @@ function StudioKeyFilter() {
             it — before ramping to transparent by 0.5, still comfortably short
             of the cyclorama's measured floor above 0.63.
           */}
-          <feComponentTransfer in="luma" result="keyed">
+          <feComponentTransfer colorInterpolationFilters="sRGB" in="luma" result="keyed">
             <feFuncA type="table" tableValues="1 1 1 1 1 1 0.6 0.15 0 0 0 0 0 0 0 1 1" />
           </feComponentTransfer>
 
@@ -855,7 +865,12 @@ function StudioKeyFilter() {
             the premultiplication after the matte (also free: composite
             operations, no new blur).
           */}
-          <feGaussianBlur in="keyed" stdDeviation="0.5" result="feathered" />
+          <feGaussianBlur
+            colorInterpolationFilters="sRGB"
+            in="keyed"
+            stdDeviation="0.5"
+            result="feathered"
+          />
 
           {/*
             Blurring a matte also spreads it outward, and the pixels it spreads
@@ -879,7 +894,7 @@ function StudioKeyFilter() {
             still eats into the garment side first, same as it always did,
             not out into the cyclorama.
           */}
-          <feComponentTransfer in="feathered" result="matte">
+          <feComponentTransfer colorInterpolationFilters="sRGB" in="feathered" result="matte">
             <feFuncA type="table" tableValues="0 0 0 0.03 0.25 0.75 0.97 1 1" />
           </feComponentTransfer>
 
@@ -918,8 +933,14 @@ function StudioKeyFilter() {
             across a much larger box, short of the halo a heavier pass would
             ring around every letter.
           */}
-          <feGaussianBlur in="SourceGraphic" stdDeviation="0.5" result="colorBlur" />
+          <feGaussianBlur
+            colorInterpolationFilters="sRGB"
+            in="SourceGraphic"
+            stdDeviation="0.5"
+            result="colorBlur"
+          />
           <feComposite
+            colorInterpolationFilters="sRGB"
             in="SourceGraphic"
             in2="colorBlur"
             operator="arithmetic"
@@ -976,6 +997,7 @@ function StudioKeyFilter() {
             first multiply never touched it.
           */}
           <feColorMatrix
+            colorInterpolationFilters="sRGB"
             in="matte"
             type="matrix"
             values="0 0 0 1 0
@@ -985,6 +1007,7 @@ function StudioKeyFilter() {
             result="alphaOpaque"
           />
           <feComposite
+            colorInterpolationFilters="sRGB"
             in="sharpened"
             in2="alphaOpaque"
             operator="arithmetic"
@@ -995,6 +1018,7 @@ function StudioKeyFilter() {
             result="decontaminated"
           />
           <feColorMatrix
+            colorInterpolationFilters="sRGB"
             in="matte"
             type="matrix"
             values="0 0 0 1 0
@@ -1004,6 +1028,7 @@ function StudioKeyFilter() {
             result="matteAsColor"
           />
           <feComposite
+            colorInterpolationFilters="sRGB"
             in="decontaminated"
             in2="matteAsColor"
             operator="arithmetic"
