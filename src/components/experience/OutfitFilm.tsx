@@ -316,6 +316,44 @@ function FilmLive({ product }: { product: Product }) {
     return () => video.removeEventListener("loadedmetadata", detectSource);
   }, []);
 
+  /**
+   * One silent play/pause to unstick WebKit's decoder.
+   *
+   * On iOS Safari, writing `currentTime` to a `<video>` that has never
+   * played can update the reported time without the decoder ever producing
+   * the frame at that time — the element reports the seek as done, but
+   * nothing new is painted, which is exactly what makes a scroll-scrub built
+   * entirely from `currentTime` writes (see the pump below) read as frozen
+   * there while working everywhere else. Chrome and desktop Safari don't
+   * have this limitation, which is why it doesn't show up until iOS.
+   *
+   * A single real playback start, however brief, gets WebKit's decode
+   * pipeline running properly; every seek after that paints correctly. Muted
+   * + `playsInline` means iOS allows this without a user gesture, and it
+   * runs while `figureRef` is still at `opacity: 0` (the wordmark hasn't
+   * dissolved yet), so there is nothing to see even on the one frame it
+   * might render before pausing.
+   */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    let primed = false;
+    const primeDecoder = () => {
+      if (primed) return;
+      primed = true;
+      video.play().then(
+        () => video.pause(),
+        // Playback can still be blocked in unusual embedding contexts (e.g.
+        // an iframe without allow="autoplay"); the scroll pump below falls
+        // back to whatever the browser can seek to on its own.
+        () => {},
+      );
+    };
+    video.addEventListener("loadedmetadata", primeDecoder);
+    if (video.readyState >= 1) primeDecoder();
+    return () => video.removeEventListener("loadedmetadata", primeDecoder);
+  }, []);
+
   const { scrollYProgress } = useScroll({
     target: sectionRef,
     offset: ["start start", "end end"],
