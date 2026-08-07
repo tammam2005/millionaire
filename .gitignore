@@ -50,3 +50,6 @@ next-env.d.ts
 # visual QA sheets for the garment mattes — regenerate with
 # `node scripts/qa-cutouts.mjs`. Output, not source.
 /.qa/
+
+.vercel
+.env*

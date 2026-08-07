@@ -1,7 +1,6 @@
 "use client";
 
 import { useScroll } from "motion/react";
-import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { AddToBag } from "@/components/product/AddToBag";
 import { Spotlight } from "@/components/experience/Spotlight";
@@ -9,7 +8,6 @@ import { Overline } from "@/components/ui/Overline";
 import type { Product } from "@/lib/commerce";
 import { formatMoney } from "@/lib/commerce";
 import { millionaireSetTurnaroundCutout } from "@/lib/media/assets";
-import { useMotionPreference } from "@/lib/motion/useMotionPreference";
 
 /**
  * Scroll timeline, in progress units across the whole film.
@@ -91,12 +89,11 @@ const CHAPTERS: readonly Chapter[] = [
  * the wordmark, the copy and the purchase panel, so the garment rotates only
  * while the page moves and holds whatever frame it stopped on.
  *
- * Reduced motion gets `FilmStatic`, which keeps the still cutouts — a clip
- * that only moves on scroll is still motion, and nothing there should autoplay.
+ * Runs identically regardless of device or motion preference — the film
+ * itself is the product presentation, not decoration layered on top of a
+ * simpler page, so there is no reduced/simplified variant to fall back to.
  */
 export function OutfitFilm({ product }: { product: Product }) {
-  const motionAllowed = useMotionPreference();
-  if (!motionAllowed) return <FilmStatic product={product} />;
   return <FilmLive product={product} />;
 }
 
@@ -404,16 +401,17 @@ function FilmLive({ product }: { product: Product }) {
     videoEl?.addEventListener("error", onSeeked);
     if (videoEl) watchFrames(videoEl);
 
-    const reduced = window.matchMedia("(pointer: coarse)").matches;
     const onPointerMove = (event: PointerEvent) => {
       // Camera drift is deliberately tiny — a couple of percent of the
       // viewport. Enough that the frame feels hand-held rather than locked
-      // off; not enough that anyone can point at what moved.
+      // off; not enough that anyone can point at what moved. Pointer Events
+      // fire for touch as well as mouse, so this tracks a finger while it is
+      // actually moving across the glass — there is just no equivalent of
+      // "hovering" for the camera to read while the phone sits still.
       camera.tx = (event.clientX / window.innerWidth - 0.5) * 2;
       camera.ty = (event.clientY / window.innerHeight - 0.5) * 2;
     };
-    if (!reduced)
-      window.addEventListener("pointermove", onPointerMove, { passive: true });
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
 
     const tick = () => {
       // Everything downstream reads the eased value, never the raw one.
@@ -535,7 +533,10 @@ function FilmLive({ product }: { product: Product }) {
       aria-label="The MILLIONAIRE hooded set"
     >
       <div className="sticky top-0 h-svh overflow-hidden">
-        <Spotlight className="top-[4%] left-1/2 h-[80svh] w-[80svh] -translate-x-1/2" />
+        <Spotlight
+          className="top-[4%] left-1/2 h-[80svh] w-[80svh] -translate-x-1/2"
+          alwaysAnimate
+        />
 
         {/* Scrim under the chapter copy on narrow screens, where the type sits
             over the garment rather than beside it. Absent from lg up. */}
@@ -1090,84 +1091,5 @@ function PurchasePanel({
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * Reduced-motion presentation.
- *
- * A film that depends on scroll choreography cannot simply have its motion
- * removed — it would be four blocks of type stacked on one image. So this is
- * the same story told as a printed spread: the wordmark, then each chapter
- * beside a fixed angle of the garment, then the purchase. Nothing is pinned,
- * nothing moves, and nothing is lost.
- */
-function FilmStatic({ product }: { product: Product }) {
-  const shot = millionaireSetTurnaroundCutout.frames.filter((f) => !f.mirrored);
-
-  return (
-    <section className="bg-void" aria-label="The MILLIONAIRE hooded set">
-      <div className="flex h-svh items-center justify-center px-(--spacing-gutter)">
-        <h1 className="font-display text-[11.8vw] leading-none tracking-[0.08em] whitespace-nowrap text-bone uppercase">
-          Millionaire
-        </h1>
-      </div>
-
-      {CHAPTERS.map((chapter, index) => (
-        <div
-          key={chapter.overline}
-          className="mx-auto grid max-w-[1600px] items-center gap-14 px-(--spacing-gutter) py-(--spacing-section) lg:grid-cols-2"
-        >
-          <div className={index === 1 ? "lg:order-2" : ""}>
-            <Image
-              src={(shot[index] ?? shot[0]!).src}
-              alt={`${millionaireSetTurnaroundCutout.alt} — ${chapter.overline}`}
-              sizes="(max-width: 1024px) 90vw, 45vw"
-              className="h-auto w-full"
-            />
-          </div>
-          <div>
-            <Overline tone="silver">{chapter.overline}</Overline>
-            <h2 className="mt-6 font-display text-(length:--text-display-md) leading-[1.1] whitespace-pre-line text-bone">
-              {chapter.title}
-            </h2>
-            <p className="mt-7 text-(length:--text-body-lg) leading-relaxed text-stone">
-              {chapter.body}
-            </p>
-            <dl className="mt-10 border-t border-line">
-              {chapter.notes?.map((note) => (
-                <div
-                  key={note.term}
-                  className="flex items-baseline gap-6 border-b border-line py-4"
-                >
-                  <dt className="w-28 shrink-0 text-overline text-ash">{note.term}</dt>
-                  <dd className="text-(length:--text-caption) text-stone">
-                    {note.detail}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </div>
-      ))}
-
-      <div
-        id="purchase"
-        className="mx-auto max-w-[1600px] px-(--spacing-gutter) pb-(--spacing-section)"
-      >
-        <div className="border-t border-line pt-10">
-          <Overline tone="silver">The complete set</Overline>
-          <h2 className="mt-4 font-display text-(length:--text-display-md) leading-none text-bone">
-            {product.title}
-          </h2>
-          <p className="mt-6 text-(length:--text-body-lg) text-bone tabular-nums">
-            {formatMoney(product.price)}
-          </p>
-          <div className="mt-10">
-            <AddToBag product={product} />
-          </div>
-        </div>
-      </div>
-    </section>
   );
 }

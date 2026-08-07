@@ -7,6 +7,18 @@ type SpotlightProps = {
   /** How far the light drifts from centre, as a fraction of the viewport. */
   reach?: number;
   className?: string;
+  /**
+   * Skip the reduced-motion / coarse-pointer opt-outs below and always
+   * track the pointer.
+   *
+   * Default off — a decorative light is exactly the kind of motion those
+   * opt-outs exist for. The hero film sets this: there the light is part of
+   * the product presentation itself (see `OutfitFilm`), not an add-on, and a
+   * touchscreen still generates `pointermove` while a finger is actually
+   * dragging across it — see the `coarse` branch below for what's lost
+   * without a finger there to move.
+   */
+  alwaysAnimate?: boolean;
 };
 
 /** Heavier than the cursor's follow on purpose — light has inertia. */
@@ -33,18 +45,20 @@ const LERP = 0.045;
  * light lags well behind the hand, which is what makes it feel like a heavy
  * fixture rather than something stuck to the mouse.
  */
-export function Spotlight({ reach = 0.04, className }: SpotlightProps) {
+export function Spotlight({ reach = 0.04, className, alwaysAnimate = false }: SpotlightProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
 
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const coarse = window.matchMedia("(pointer: coarse)");
-    // With no pointer to follow, or motion suppressed, the light simply sits
-    // where it was composed. Static is a valid lighting state.
-    if (reduced.matches || coarse.matches) return;
+    if (!alwaysAnimate) {
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const coarse = window.matchMedia("(pointer: coarse)");
+      // With no pointer to follow, or motion suppressed, the light simply
+      // sits where it was composed. Static is a valid lighting state.
+      if (reduced.matches || coarse.matches) return;
+    }
 
     const target = { x: 0, y: 0 };
     const current = { x: 0, y: 0 };
@@ -69,7 +83,7 @@ export function Spotlight({ reach = 0.04, className }: SpotlightProps) {
       cancelAnimationFrame(frame);
       window.removeEventListener("pointermove", onPointerMove);
     };
-  }, [reach]);
+  }, [reach, alwaysAnimate]);
 
   return (
     <div
