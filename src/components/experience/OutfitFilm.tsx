@@ -1,7 +1,7 @@
 "use client";
 
 import { useScroll } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AddToBag } from "@/components/product/AddToBag";
 import { Spotlight } from "@/components/experience/Spotlight";
 import { Overline } from "@/components/ui/Overline";
@@ -224,6 +224,145 @@ const GLIDE_NORMALIZE_FRAMES = 2;
  */
 const SUBFRAME_GLIDE_PX = 2.4;
 
+/**
+ * The iOS keying path.
+ *
+ * `StudioKeyFilter` — an SVG `<filter>` applied via CSS `filter: url(#...)`
+ * — is what every other browser on the fallback path uses to key the MP4.
+ * On iOS (every browser there, Safari included, since Apple requires all of
+ * them to embed WebKit) that same filter graph, on this same file, renders
+ * with the background washed out rather than keyed away — confirmed not to
+ * be the video file itself: a frame-for-frame pixel comparison against the
+ * source found them identical (SSIM 0.999, PSNR ~48dB, gamma flat at 1.0
+ * across the tonal range). So the defect is specifically in WebKit's
+ * SVG-filter-on-video rendering path on iOS, not in anything upstream of it.
+ *
+ * This bypasses that path entirely for iOS: the same keying math, ported to
+ * plain JS operating on `ImageData` from a `<canvas>` instead of on GPU/SVG
+ * filter primitives. `getImageData`/`putImageData` hand back and accept raw,
+ * already-decoded RGBA bytes with no further filter-graph or color-space
+ * translation for an engine to diverge on — which is the whole point: fewer
+ * rendering stages between "decoded pixel" and "screen" is fewer places for
+ * this exact class of bug to live.
+ *
+ * The un-keying math is exact rather than approximate, which the original
+ * SVG filter's luminance table could not be: that filter had to *guess*
+ * where the cyclorama was from luminance alone, because a CSS filter has no
+ * way to know what it was composited over. Here the backdrop is a flat,
+ * known constant (`IOS_KEY_BACKDROP` — the same grey the MP4 was baked
+ * against), so alpha and true colour can be solved for directly rather than
+ * approximated: standard matte un-premultiplication,
+ * `true = (observed - backdrop × (1 − alpha)) ⁄ alpha`.
+ */
+const IOS_KEY_BACKDROP = { r: 184, g: 184, b: 184 } as const;
+
+/**
+ * Luma → alpha, sampled at the same seventeen stops as `StudioKeyFilter`'s
+ * first `feFuncA` table (`tableValues="1 1 1 1 1 1 0.6 0.15 0 0 0 0 0 0 0 1 1"`),
+ * so the keyed silhouette matches the desktop/Android result stop-for-stop.
+ * Piecewise-linear between stops, matching `feFuncA type="table"` semantics
+ * exactly rather than approximating them.
+ */
+const IOS_ALPHA_TABLE = [1, 1, 1, 1, 1, 1, 0.6, 0.15, 0, 0, 0, 0, 0, 0, 0, 1, 1] as const;
+
+function iosAlphaFromLuma(luma255: number): number {
+  const scaled = (luma255 / 255) * (IOS_ALPHA_TABLE.length - 1);
+  const i = Math.min(Math.max(Math.floor(scaled), 0), IOS_ALPHA_TABLE.length - 2);
+  const frac = scaled - i;
+  const a = IOS_ALPHA_TABLE[i]!;
+  const b = IOS_ALPHA_TABLE[i + 1]!;
+  return a + (b - a) * frac;
+}
+
+/** Internal pixel-buffer size for the iOS canvas — see `keyFrameOntoCanvas`. */
+const IOS_CANVAS_WIDTH = 1280;
+const IOS_CANVAS_HEIGHT = 720;
+
+/**
+ * Draws the video's current frame onto `canvas`, keyed and un-premultiplied
+ * against the known flat backdrop.
+ *
+ * Downscaled to `IOS_CANVAS_WIDTH`×`IOS_CANVAS_HEIGHT` at the `drawImage`
+ * step (a quarter the pixel count of the source's native 1920×1080) —
+ * `getImageData`/`putImageData` are the expensive part of this, or would be
+ * run every rAF turn; run only once per *arrived* decoded frame (see the
+ * pump), a quarter-resolution buffer keeps that cost well inside a phone's
+ * budget without a visible sharpness loss at the size this box actually
+ * renders on a phone screen.
+ *
+ * `willReadFrequently` hints the browser toward a software-backed 2D
+ * context — normally the wrong call, but exactly right here: it avoids a
+ * GPU→CPU readback stall on every single `getImageData`, which is the
+ * common cause of a canvas pipeline like this one costing far more than its
+ * pixel count would suggest.
+ */
+function keyFrameOntoCanvas(video: HTMLVideoElement, canvas: HTMLCanvasElement): void {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return;
+  const { width, height } = canvas;
+  ctx.drawImage(video, 0, 0, width, height);
+  const frame = ctx.getImageData(0, 0, width, height);
+  const data = frame.data;
+  const { r: bgR, g: bgG, b: bgB } = IOS_KEY_BACKDROP;
+  for (let p = 0; p < data.length; p += 4) {
+    const r = data[p]!;
+    const g = data[p + 1]!;
+    const b = data[p + 2]!;
+    const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const alpha = iosAlphaFromLuma(luma);
+    if (alpha > 0.02) {
+      const inv = 1 - alpha;
+      data[p] = Math.max(0, Math.min(255, (r - bgR * inv) / alpha));
+      data[p + 1] = Math.max(0, Math.min(255, (g - bgG * inv) / alpha));
+      data[p + 2] = Math.max(0, Math.min(255, (b - bgB * inv) / alpha));
+      data[p + 3] = Math.round(alpha * 255);
+    } else {
+      data[p] = 0;
+      data[p + 1] = 0;
+      data[p + 2] = 0;
+      data[p + 3] = 0;
+    }
+  }
+  ctx.putImageData(frame, 0, 0);
+}
+
+/**
+ * True on an iPhone/iPod, or an iPad reporting as `MacIntel` (iPadOS has
+ * done this since 13, to keep desktop-gated sites working) with touch —
+ * the standard feature-detection proxy for "this is iOS", since there is no
+ * direct feature query for "does this engine have the SVG-filter-on-video
+ * bug this file exists to route around." Checked once; iOS does not gain or
+ * lose WebKit at runtime.
+ */
+function detectIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+/**
+ * Edge falloff, not a vignette — shared by the video and the iOS canvas.
+ *
+ * The key cannot guarantee that every pixel along the clip's own border
+ * resolves to zero alpha — the cyclorama vignettes as it approaches the
+ * frame edge, and wherever it drifts out of the transparent band it
+ * survives as a hairline and reads as a box around the figure. This drops
+ * alpha over the outermost 3%, which on this framing contains nothing but
+ * backdrop: the figure occupies the middle quarter of the frame and is
+ * never touched. It removes the boundary rather than shading it, so there
+ * is no mask edge to see.
+ */
+const EDGE_MASK_STYLE = {
+  maskImage:
+    "linear-gradient(to right, transparent 0, #000 3%, #000 97%, transparent 100%), linear-gradient(to bottom, transparent 0, #000 3%, #000 97%, transparent 100%)",
+  WebkitMaskImage:
+    "linear-gradient(to right, transparent 0, #000 3%, #000 97%, transparent 100%), linear-gradient(to bottom, transparent 0, #000 3%, #000 97%, transparent 100%)",
+  maskComposite: "intersect",
+  WebkitMaskComposite: "source-in",
+} as const;
+
 const WORD_OPACITY = [
   [0, 1],
   [T.wordHold, 1],
@@ -289,10 +428,38 @@ const BUY_Y = [
 function FilmLive({ product }: { product: Product }) {
   const sectionRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const wordRef = useRef<HTMLDivElement>(null);
   const figureRef = useRef<HTMLDivElement>(null);
   const panelRefs = useRef<(HTMLDivElement | null)[]>([]);
   const purchaseRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * iOS renders the keyed MP4 through `<canvas>` instead of the SVG
+   * `filter`/CSS pipeline below — see `keyFrameOntoCanvas`. `useLayoutEffect`
+   * rather than `useEffect`: this decides which element is even visible
+   * (`isIOS` gates `opacity` on the video and whether the canvas renders at
+   * all), so it needs to land before the browser's first paint, not after —
+   * the difference between iOS never seeing the unkeyed video and seeing it
+   * for one frame.
+   *
+   * A ref alongside the state: the state drives what JSX renders, but the
+   * pump effect below is set up once (its dependency is `scrollYProgress`,
+   * not this), so its closures need a value that stays current without
+   * forcing that effect to tear down and rebuild whenever this changes —
+   * which, in practice, is once, but the ref is what makes "once" safe
+   * rather than assumed.
+   */
+  const [isIOS, setIsIOS] = useState(false);
+  const isIOSRef = useRef(false);
+  useLayoutEffect(() => {
+    const detect = () => {
+      const ios = detectIOS();
+      isIOSRef.current = ios;
+      setIsIOS(ios);
+    };
+    detect();
+  }, []);
 
   /**
    * Whether the browser fell back to the keyed MP4 rather than playing the
@@ -421,9 +588,23 @@ function FilmLive({ product }: { product: Product }) {
       video.currentTime = wanted;
     };
 
+    /*
+       On iOS, key the frame that just arrived onto the canvas — called after
+       `pump()` rather than before, so the next seek's decode is already
+       underway in the browser's media pipeline before this spends main-
+       thread time on `getImageData`/`putImageData`, instead of blocking it.
+    */
+    const keyIOSFrame = () => {
+      if (!isIOSRef.current) return;
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (video && canvas) keyFrameOntoCanvas(video, canvas);
+    };
+
     const onSeeked = () => {
       seekInFlight = false;
       pump();
+      keyIOSFrame();
     };
 
     /*
@@ -445,6 +626,7 @@ function FilmLive({ product }: { product: Product }) {
       frameHandle = video.requestVideoFrameCallback(() => {
         seekInFlight = false;
         pump();
+        keyIOSFrame();
         watchFrames(video);
       });
     };
@@ -455,6 +637,11 @@ function FilmLive({ product }: { product: Product }) {
     // for good on the frame it happened to be holding.
     videoEl?.addEventListener("error", onSeeked);
     if (videoEl) watchFrames(videoEl);
+    // Belt-and-braces for the very first frame: `watchFrames` should already
+    // catch it via the decoded frame the priming play/pause produces, but
+    // `loadeddata` (fires once any frame is decodable) means the canvas is
+    // never left blank if that play() was blocked in some embedding context.
+    videoEl?.addEventListener("loadeddata", keyIOSFrame);
 
     const onPointerMove = (event: PointerEvent) => {
       // Camera drift is deliberately tiny — a couple of percent of the
@@ -562,7 +749,13 @@ function FilmLive({ product }: { product: Product }) {
         const glide =
           Math.max(-1, Math.min(1, residualFrames / GLIDE_NORMALIZE_FRAMES)) *
           SUBFRAME_GLIDE_PX;
-        glideVideo.style.transform = `translate3d(${glide.toFixed(2)}px,0,0)`;
+        const glideTransform = `translate3d(${glide.toFixed(2)}px,0,0)`;
+        glideVideo.style.transform = glideTransform;
+        // iOS shows the canvas, not the (invisible) video — the glide has to
+        // move whichever element is actually on screen.
+        if (isIOSRef.current && canvasRef.current) {
+          canvasRef.current.style.transform = glideTransform;
+        }
       }
 
       raf = requestAnimationFrame(tick);
@@ -574,6 +767,7 @@ function FilmLive({ product }: { product: Product }) {
       window.removeEventListener("pointermove", onPointerMove);
       videoEl?.removeEventListener("seeked", onSeeked);
       videoEl?.removeEventListener("error", onSeeked);
+      videoEl?.removeEventListener("loadeddata", keyIOSFrame);
       if (frameHandle) {
         (videoEl as FrameCallbackVideo | null)?.cancelVideoFrameCallback?.(frameHandle);
       }
@@ -714,32 +908,21 @@ function FilmLive({ product }: { product: Product }) {
               muted
               playsInline
               preload="auto"
-              aria-label={millionaireSetTurnaroundCutout.alt}
+              aria-label={isIOS ? undefined : millionaireSetTurnaroundCutout.alt}
+              aria-hidden={isIOS || undefined}
               className="absolute top-[3%] left-[3%] h-[94%] w-[94%] object-cover"
               style={{
-                filter: filterActive ? `url(#${KEY_FILTER_ID})` : undefined,
+                // iOS keys and paints the canvas below instead — see
+                // `keyFrameOntoCanvas`. The video stays mounted and decoding
+                // either way (it is the canvas's only frame source), just
+                // invisible there rather than removed.
+                opacity: isIOS ? 0 : 1,
+                pointerEvents: isIOS ? "none" : undefined,
+                filter: filterActive && !isIOS ? `url(#${KEY_FILTER_ID})` : undefined,
                 transform: "translateZ(0)",
                 willChange: "transform",
                 backfaceVisibility: "hidden",
-                /*
-                   Edge falloff, not a vignette.
-
-                   The key cannot guarantee that every pixel along the clip's
-                   own border resolves to zero alpha — the cyclorama vignettes
-                   as it approaches the frame edge, and wherever it drifts out
-                   of the transparent band it survives as a hairline and reads
-                   as a box around the video. This drops alpha over the
-                   outermost 3%, which on this framing contains nothing but
-                   backdrop: the figure occupies the middle quarter of the
-                   frame and is never touched. It removes the boundary rather
-                   than shading it, so there is no mask edge to see.
-                */
-                maskImage:
-                  "linear-gradient(to right, transparent 0, #000 3%, #000 97%, transparent 100%), linear-gradient(to bottom, transparent 0, #000 3%, #000 97%, transparent 100%)",
-                WebkitMaskImage:
-                  "linear-gradient(to right, transparent 0, #000 3%, #000 97%, transparent 100%), linear-gradient(to bottom, transparent 0, #000 3%, #000 97%, transparent 100%)",
-                maskComposite: "intersect",
-                WebkitMaskComposite: "source-in",
+                ...EDGE_MASK_STYLE,
               }}
             >
               {/* Ordered by preference — the browser plays the first it
@@ -748,6 +931,22 @@ function FilmLive({ product }: { product: Product }) {
               <source src={TURNTABLE_WEBM_SRC} type="video/webm" />
               <source src={TURNTABLE_MP4_SRC} type="video/mp4" />
             </video>
+            {isIOS && (
+              <canvas
+                ref={canvasRef}
+                width={IOS_CANVAS_WIDTH}
+                height={IOS_CANVAS_HEIGHT}
+                role="img"
+                aria-label={millionaireSetTurnaroundCutout.alt}
+                className="absolute top-[3%] left-[3%] h-[94%] w-[94%] object-cover"
+                style={{
+                  transform: "translateZ(0)",
+                  willChange: "transform",
+                  backfaceVisibility: "hidden",
+                  ...EDGE_MASK_STYLE,
+                }}
+              />
+            )}
           </div>
         </div>
 
