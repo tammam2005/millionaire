@@ -2,7 +2,7 @@
 
 import { useScroll } from "motion/react";
 import Image from "next/image";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AddToBag } from "@/components/product/AddToBag";
 import { Spotlight } from "@/components/experience/Spotlight";
 import { Overline } from "@/components/ui/Overline";
@@ -147,15 +147,39 @@ function stopsAt(p: number, stops: readonly (readonly [number, number])[]): numb
 const FILM_LERP = 0.075;
 
 /**
- * The turntable clip.
+ * The turntable clip, in two formats.
  *
  * Never played — `currentTime` is written directly from the same smoothed
  * scroll value that drives everything else on the stage, so the garment turns
- * only while the page moves and holds the exact frame it stopped on. The
- * filename is the one the client supplied; the space has to be encoded or the
- * request 404s.
+ * only while the page moves and holds the exact frame it stopped on.
+ *
+ * Sourced from a second studio pass, graded and keyed in DaVinci Resolve with
+ * a real alpha channel (CineForm RGBA) rather than shot against a cyclorama —
+ * so the matte is a genuine per-pixel alpha, not a luminance guess. That
+ * matters because no browser plays a QuickTime/CineForm alpha track directly,
+ * so the source is re-encoded to two web formats and offered as ordered
+ * `<source>` children — the browser picks the first it can play:
+ *
+ * 1. **WebM/VP9 with real alpha** (`.webm`) — the primary. Chrome, Edge and
+ *    Firefox composite its alpha channel natively, so the garment needs no
+ *    keying at all here; `StudioKeyFilter` is skipped for this source (see
+ *    the `needsKeyFilter` detection below).
+ * 2. **MP4/H.264** (`.mp4`) — the fallback for Safari, which cannot decode
+ *    alpha WebM. Baked by compositing the same alpha footage over a flat
+ *    mid-grey chosen to sit inside `StudioKeyFilter`'s existing transparent
+ *    luminance band (see that filter's comments), so the fallback reuses the
+ *    same tuned key rather than needing its own.
+ *
+ * Both are re-encoded all-intra (GOP=1): every frame is its own keyframe, so
+ * a scroll-driven seek decodes exactly one frame instead of walking forward
+ * through a GOP the way the client's original upload (still at
+ * `public/videos/Create_a_perfectly_smooth_luxu 2.mp4`, untouched) required.
+ * Same 1920×1080, same 24fps, same 240 frames, same 10.000s as the previous
+ * pass. Audio is dropped from both: the element is permanently muted and
+ * never played, so the track could only ever be dead weight.
  */
-const TURNTABLE_SRC = "/videos/Create_a_perfectly_smooth_luxu%202.mp4";
+const TURNTABLE_WEBM_SRC = "/videos/hooded-set-turntable.webm";
+const TURNTABLE_MP4_SRC = "/videos/hooded-set-turntable-fallback.mp4";
 
 /**
  * The clip's frame interval, in seconds.
@@ -173,27 +197,27 @@ const FRAME_STEP = 1 / 24;
 const KEY_FILTER_ID = "millionaire-studio-key";
 
 /**
- * Largest distance, in frames, a single seek is allowed to cover.
+ * How many frames of residual correspond to full sub-frame glide amplitude.
  *
- * Without a cap the pump always aims at wherever the scroll has got to, so a
- * quick flick asks the decoder to jump twenty frames and the turn arrives as
- * one visible lurch. Capping the step makes it walk the intermediate frames
- * instead — each decode costs the same, but the ones that land describe a
- * continuous rotation rather than a cut. Six is the point where it stops
- * reading as a jump without falling so far behind that the garment lags the
- * page.
+ * Not a seek cap — with every frame a keyframe, a seek costs the same whether
+ * it moves one frame or fifty, so there is nothing to gain by walking toward
+ * the target in steps the way the long-GOP source needed. The pump now seeks
+ * straight to wherever the scroll is, every time. This constant only shapes
+ * the glide below: at the display's refresh rate against this clip's decode
+ * rate, the residual between two arrived frames rarely exceeds one or two
+ * frames' worth, so that is the range the glide is calibrated across.
  */
-const MAX_SEEK_FRAMES = 6;
+const GLIDE_NORMALIZE_FRAMES = 2;
 
 /**
  * Horizontal glide applied per frame of un-decoded residual, in pixels.
  *
- * Sub-frame interpolation. The decoder can only hand over whole frames, and on
- * this clip it hands them over at roughly a tenth the rate the display
- * refreshes — so between two decodes the garment is, strictly, frozen. Sliding
+ * Sub-frame interpolation. However fast the decoder now runs, it can only
+ * hand over whole frames, and the display refreshes faster than that — so
+ * between two decodes the garment is, strictly, momentarily frozen. Sliding
  * the presented frame by the fraction of a frame still owed keeps something
  * moving on every one of those refreshes, in the direction the turn is already
- * going, so the eye reads continuous motion instead of a held image.
+ * going, so the eye reads continuous motion rather than a held image.
  *
  * Small on purpose: a frame of this turntable moves the silhouette a couple of
  * pixels, so this is calibrated to that and no further. Larger values buy
@@ -271,6 +295,30 @@ function FilmLive({ product }: { product: Product }) {
   const panelRefs = useRef<(HTMLDivElement | null)[]>([]);
   const purchaseRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * Whether the browser fell back to the keyed MP4 rather than playing the
+   * alpha WebM.
+   *
+   * `StudioKeyFilter` rewrites alpha from luminance — correct for the flat
+   * grey the MP4 was composited over, destructive on the WebM, which already
+   * carries real per-pixel alpha and would have its transparent background
+   * (near-black where alpha is 0) read as near-opaque garment by the same
+   * table. So the filter is applied only once we know which `<source>` the
+   * browser actually selected. `currentSrc` is empty until the resource
+   * selection algorithm has picked one, which `loadedmetadata` guarantees has
+   * happened; a `readyState` check covers the case where it fired before this
+   * effect's listener was attached.
+   */
+  const [needsKeyFilter, setNeedsKeyFilter] = useState(false);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const detectSource = () => setNeedsKeyFilter(video.currentSrc.endsWith(".mp4"));
+    video.addEventListener("loadedmetadata", detectSource);
+    if (video.readyState >= 1) detectSource();
+    return () => video.removeEventListener("loadedmetadata", detectSource);
+  }, []);
+
   const { scrollYProgress } = useScroll({
     target: sectionRef,
     offset: ["start start", "end end"],
@@ -314,12 +362,11 @@ function FilmLive({ product }: { product: Product }) {
       // Below half a frame the decoder would hand back the frame already on
       // screen, so the seek costs a decode and changes nothing.
       if (Math.abs(wanted - shown) < FRAME_STEP * 0.5) return;
-      // Walk toward the target rather than leaping to it — see MAX_SEEK_FRAMES.
-      const reach = FRAME_STEP * MAX_SEEK_FRAMES;
-      const delta = wanted - shown;
-      const desired = Math.abs(delta) > reach ? shown + Math.sign(delta) * reach : wanted;
+      // Straight to the target. With every frame a keyframe there is no
+      // decode-chain cost that grows with distance, so there is nothing a
+      // stepped walk would buy — see GLIDE_NORMALIZE_FRAMES.
       seekInFlight = true;
-      video.currentTime = desired;
+      video.currentTime = wanted;
     };
 
     const onSeeked = () => {
@@ -434,8 +481,10 @@ function FilmLive({ product }: { product: Product }) {
 
          - Seeking while a previous seek is still in flight makes the decoder
            abandon work it has already started, which is what turns a fast
-           scroll into a slideshow. Waiting for `seeking` to clear issues
-           exactly one seek per decode, as fast as the decoder can retire them.
+           scroll into a slideshow. Waiting for the frame to actually present
+           (or, as a fallback, for `seeked`) issues exactly one seek at a time,
+           as fast as the decoder can retire them — see `pump` and
+           `watchFrames` above.
          - `duration` is NaN until metadata loads, and writing NaN to
            `currentTime` throws.
       */
@@ -458,7 +507,8 @@ function FilmLive({ product }: { product: Product }) {
         const residualFrames =
           (seekTarget * glideVideo.duration - glideVideo.currentTime) / FRAME_STEP;
         const glide =
-          Math.max(-1, Math.min(1, residualFrames / MAX_SEEK_FRAMES)) * SUBFRAME_GLIDE_PX;
+          Math.max(-1, Math.min(1, residualFrames / GLIDE_NORMALIZE_FRAMES)) *
+          SUBFRAME_GLIDE_PX;
         glideVideo.style.transform = `translate3d(${glide.toFixed(2)}px,0,0)`;
       }
 
@@ -500,7 +550,7 @@ function FilmLive({ product }: { product: Product }) {
           style={{ opacity: 1 }}
           className="pointer-events-none absolute inset-0 flex items-center justify-center will-change-[opacity,transform,filter]"
         >
-          <h1 className="block font-display text-[11.8vw] leading-none tracking-[0.08em] whitespace-nowrap text-bone uppercase select-none">
+          <h1 className="block font-display text-[9vw] leading-none tracking-[0.08em] whitespace-nowrap text-bone uppercase select-none lg:text-[11.8vw]">
             Millionaire
           </h1>
         </div>
@@ -517,7 +567,46 @@ function FilmLive({ product }: { product: Product }) {
               well past the element so the feather can resolve, and anything
               clipping back to the box would reinstate the edge it exists to
               remove. */}
-          <div className="relative h-[78svh] w-[78svh] max-w-[92vw] overflow-visible">
+          {/*
+             Static 16% display enlargement — a rendering-level change, not an
+             addition to the film's own choreography. Grows the box's own
+             native size (78svh → 90.48svh, exactly 78×1.16) rather than
+             adding a `transform: scale()` on top of it. The two can look
+             identical at rest but are not the same thing to the compositor:
+             a `transform: scale()` wrapping this box was tried and measured
+             directly — 55.2fps decoded without it, 2fps with it.
+             The video's SVG filter (StudioKeyFilter) is what pays for that:
+             browsers rasterize a filtered element at a resolution accounting
+             for its cumulative on-screen scale, so stacking a second
+             transformed layer directly around the filtered box pushed the
+             feather blur back into the slow path this same file already
+             documents (0.5 vs 0.75 stdDeviation, 55fps vs 1.7fps) — without
+             the blur's own radius changing at all. Growing the box's real
+             size instead adds no new transformed layer: `figureRef`, one
+             level up, remains the only transform in the chain, exactly as it
+             already was before this change.
+
+             This still composes multiplicatively with `figureRef`'s own
+             scale exactly the way the transform approach would have: final
+             on-screen size = 1.16 × FIG_SCALE(p) at every point in the film.
+             FIG_SCALE itself — the 0.9→1→1.05 curve — is untouched, and
+             nothing about the source video changes: `object-cover` still
+             shows its full native framing, just inside a bigger box, so
+             cropping risk is unchanged. The box is still centered by the
+             flex parent, so it grows around the same point rather than
+             shifting it.
+
+             `max-h-[92vw]` mirrors `max-w-[92vw]`: on a narrow, tall
+             viewport (a phone) the box's own 90.48svh height comfortably
+             clears the width cap alone, so only width was ever constrained
+             — the box stopped being square, and `object-cover` on the video
+             inside then framed itself against that stretched box instead of
+             the intended square, cropping the garment badly. Capping height
+             the same way keeps the box square everywhere; on desktop, where
+             90.48svh is already far under 92vw of width, neither cap
+             engages, so this changes nothing there.
+          */}
+          <div className="relative h-[90.48svh] w-[90.48svh] max-w-[92vw] max-h-[92vw] overflow-visible">
             <StudioKeyFilter />
             {/*
                The clip runs at its own brightness and colour. The backdrop is
@@ -527,16 +616,44 @@ function FilmLive({ product }: { product: Product }) {
                own compositor layer, so a decoded frame is uploaded straight to
                the GPU and the page around it is never repainted to show it.
             */}
+            {/*
+               Framing safety margin, not a crop fix on the source.
+
+               The figure wrapper (`figureRef`, above) grows to 1.05× scale
+               late in the film while the turn is still turning through its
+               back half, and the source footage was framed with very little
+               headroom above the head to begin with — the two together were
+               enough to push the crown of the hood past the top of frame at
+               the highest scale values. A 3% margin here shrinks the video
+               fractionally *within its own unchanged box*, buying back margin
+               on every edge before the outer scale can spend it, without
+               moving the box itself or touching the scale curve that drives it.
+
+               `top-[3%] left-[3%] h-[94%] w-[94%]`, not the `inset-[3%]`
+               shorthand this was originally written as. That was a real bug,
+               found and fixed in this pass: `inset` alone, with no explicit
+               width/height, leaves both "auto" — and for a replaced element
+               (a `<video>`) with all four sides constrained and both
+               dimensions auto, the browser resolves the conflict by deriving
+               one dimension from the intrinsic aspect ratio instead of
+               honouring the inset on that axis. Concretely, this video was
+               rendering at 786×442 inside a 786×786 box — full width, but
+               height locked to the clip's native 16:9 regardless of the box's
+               own height — which is why every size change made to the box in
+               the last several rounds landed on screen as far smaller than
+               measured, or not at all. Explicit height and width remove the
+               ambiguity outright: both dimensions are stated, so there is
+               nothing left for the browser to infer from aspect ratio.
+            */}
             <video
               ref={videoRef}
-              src={TURNTABLE_SRC}
               muted
               playsInline
               preload="auto"
               aria-label={millionaireSetTurnaroundCutout.alt}
-              className="h-full w-full object-cover"
+              className="absolute top-[3%] left-[3%] h-[94%] w-[94%] object-cover"
               style={{
-                filter: `url(#${KEY_FILTER_ID})`,
+                filter: needsKeyFilter ? `url(#${KEY_FILTER_ID})` : undefined,
                 transform: "translateZ(0)",
                 willChange: "transform",
                 backfaceVisibility: "hidden",
@@ -560,7 +677,13 @@ function FilmLive({ product }: { product: Product }) {
                 maskComposite: "intersect",
                 WebkitMaskComposite: "source-in",
               }}
-            />
+            >
+              {/* Ordered by preference — the browser plays the first it
+                  supports. WebM's real alpha first; the keyed MP4 only for
+                  browsers (Safari) that can't decode alpha WebM. */}
+              <source src={TURNTABLE_WEBM_SRC} type="video/webm" />
+              <source src={TURNTABLE_MP4_SRC} type="video/mp4" />
+            </video>
           </div>
         </div>
 
@@ -585,34 +708,34 @@ function FilmLive({ product }: { product: Product }) {
 }
 
 /**
- * Background key for the turntable clip.
+ * Background key and local sharpening for the turntable clip, as one filter.
  *
- * A real alpha matte, not a brightness trick: the clip's own colour comes
- * through untouched and only the alpha channel is rewritten.
+ * Two independent branches, both reading `SourceGraphic`, that only meet at
+ * the very last step:
  *
- * The obvious approach — treat everything bright as background — is the one
- * thing that cannot work here, and `scripts/extract-cutouts.mjs` documents
- * why: the chest wordmark and thigh crest are the brightest pixels in frame,
- * so a one-sided luminance key deletes exactly the branding the garment
- * exists to carry.
+ * 1. **Alpha** — a real matte, not a brightness trick. The clip's own colour
+ *    is never graded or dimmed to hide the backdrop; only the alpha channel
+ *    is rewritten. The obvious approach, treating everything bright as
+ *    background, is the one thing that cannot work here, and
+ *    `scripts/extract-cutouts.mjs` documents why: the chest wordmark and
+ *    thigh crest are the brightest pixels in frame, so a one-sided luminance
+ *    key deletes exactly the branding the garment exists to carry. So the key
+ *    is two-sided: the near-black garment stays opaque at the bottom of the
+ *    luminance scale, the silver prints stay opaque at the top, and the
+ *    cyclorama — which sits between them and nowhere near either — is what
+ *    drops out. A feather blur on this branch alone turns the key's hard step
+ *    into a soft, anti-aliased edge.
+ * 2. **Colour** — an unsharp mask, recovering some of what a 1280×720 clip
+ *    loses when it is stretched across a box several times that size.
  *
- * So the key is two-sided. Luminance goes into alpha, then a lookup table
- * makes only the *middle* of the range transparent: the near-black garment
- * stays opaque at the bottom of the scale, the silver prints stay opaque at
- * the top, and the cyclorama — which sits between them and nowhere near
- * either — is what drops out. The ramps between bands are what leave a soft,
- * anti-aliased edge instead of a cut-out's hard one.
+ * Because the two branches never cross until the final composite, sharpening
+ * the print cannot move the silhouette edge and feathering the edge cannot
+ * soften the print — each `feComposite operator="in"` at the end of a branch
+ * takes its *colour* from one place and its *alpha* from the other.
  *
- * `colorInterpolationFilters="sRGB"` is not optional. The filter default is
- * linearRGB, which would silently shift every colour in the clip on its way
- * through — the exact opposite of leaving the footage alone.
- *
- * **The garment itself is never filtered.** Everything below builds an alpha
- * matte and nothing else; the final `feComposite operator="in"` reads colour
- * from the untouched `SourceGraphic` and takes only the *alpha* of the matte.
- * That is what lets the silhouette edge be feathered while the weave, the
- * seams and the print stay exactly as sharp as the footage is — softening the
- * matte cannot soften the pixels inside it.
+ * `colorInterpolationFilters="sRGB"` is not optional on either branch. The
+ * filter default is linearRGB, which would silently shift every colour in the
+ * clip on its way through — the exact opposite of leaving the footage alone.
  *
  * The filter region is deliberately generous. A region that ends near the
  * element's own edge truncates the feather blur exactly at the frame boundary,
@@ -656,12 +779,22 @@ function StudioKeyFilter() {
             The lit floor sits at roughly 0.76 and stays comfortably inside the
             transparent band, so buying the prints back costs nothing there.
 
-            The bottom of the range is unchanged and deliberately tight: the
-            garment's own highlights reach roughly 0.20, so the opaque band
-            cannot extend past 0.25 without the cyclorama starting to stick.
+            The bottom of the range: the garment's own highlights — the hood,
+            the shoulder, the chest under the key light — reach roughly 0.20,
+            documented here once already, but the table that shipped against
+            that number didn't actually honour it. Its flat-1 opaque region
+            only ran to 0.1875, one stop short, with the ramp to transparent
+            already underway by 0.20 — a `feFuncA` table interpolates linearly
+            between entries, so that highlight landed around 80% opaque, not
+            the intended 100%, and read as the matte eating into the garment
+            itself: missing coverage on exactly the surfaces that catch the
+            light, not a framing crop. Full opacity now holds to 0.3125 —
+            real margin past the measured highlight, not a value flush against
+            it — before ramping to transparent by 0.5, still comfortably short
+            of the cyclorama's measured floor above 0.63.
           */}
           <feComponentTransfer in="luma" result="keyed">
-            <feFuncA type="table" tableValues="1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 1 1" />
+            <feFuncA type="table" tableValues="1 1 1 1 1 1 0.6 0.15 0 0 0 0 0 0 0 1 1" />
           </feComponentTransfer>
 
           {/*
@@ -673,13 +806,15 @@ function StudioKeyFilter() {
             same soft edge a real matte has.
           */}
           {/*
-            0.5, and not a fraction more, for a measured reason: at
-            stdDeviation 0.5 this blur costs about 27ms per decoded frame, and
-            at 1.1 it costs 580ms — the radius crosses a threshold where the
-            compositor stops taking the fast path and the whole scrub collapses
-            to roughly one frame a second. Half a pixel is enough to turn the
-            key's hard step into a ramp; anything more buys a softness nobody
-            can see at the price of the motion itself.
+            0.5, and not a fraction more — re-confirmed, not just estimated:
+            0.5 costs ~27ms per decoded frame; 0.75, one stop up, measured at
+            *1.7fps* — the compositor falls off its fast path somewhere in
+            that gap and the whole scrub collapses. This is the ceiling, not a
+            starting point. Edge smoothness beyond what half a pixel of blur
+            buys has to come from elsewhere — see the alpha table immediately
+            below (free: a lookup table costs the same at any resolution) and
+            the premultiplication after the matte (also free: composite
+            operations, no new blur).
           */}
           <feGaussianBlur in="keyed" stdDeviation="0.5" result="feathered" />
 
@@ -690,13 +825,154 @@ function StudioKeyFilter() {
             biasing it low pulls the matte back inside the silhouette: the
             edge stays soft, but the feather eats into the garment rather than
             out into the background it was cut from.
+
+            Narrowed again in this pass, still without touching the blur that
+            produces `feathered` — a lookup table costs the same regardless of
+            its shape, so this is free the same way the nine-stop resolution
+            bump was. The transition now clears essentially all its distance
+            between input 0.375 and 0.75 (was 0.25 to 0.875): the *spatial*
+            softness is whatever the unchanged 0.5px blur produces, but the
+            *tonal* band over which a pixel can sit at some ambiguous partial
+            alpha is deliberately narrower, which is directly the same thing
+            as fewer pixels able to carry a visible fringe. The 50%-alpha
+            crossing still lands past the input's own midpoint (~0.56, versus
+            ~0.53 before) — narrower is not the same as re-centred; the ramp
+            still eats into the garment side first, same as it always did,
+            not out into the cyclorama.
           */}
           <feComponentTransfer in="feathered" result="matte">
-            <feFuncA type="table" tableValues="0 0.08 0.45 0.82 1" />
+            <feFuncA type="table" tableValues="0 0 0 0.03 0.25 0.75 0.97 1 1" />
           </feComponentTransfer>
 
-          {/* Untouched pixels, matte alpha. */}
-          <feComposite in="SourceGraphic" in2="matte" operator="in" />
+          {/*
+            Local sharpening — an unsharp mask, the same technique a print
+            house uses on a soft scan. It runs on a second, independent branch
+            straight off `SourceGraphic`, entirely separate from the alpha
+            chain above: this stage never touches the matte, and the matte
+            stage never touches colour, so sharpening the print cannot move
+            the silhouette edge and feathering the edge cannot soften the
+            print.
+
+            The method: blur the colour slightly, then push each pixel *away*
+            from its own blurred version. Blurring removes fine detail and
+            leaves the broad shape; subtracting that from the original and
+            adding the difference back amplifies exactly the high-frequency
+            content the blur discarded — the weave, the seam lines, the edges
+            of the printed letterforms — while flat regions (blur ≈ original)
+            are left alone, which is what keeps this from shifting colour the
+            way a saturation or contrast move would.
+
+            `feComposite operator="arithmetic"` computes
+            `k1·i1·i2 + k2·i1 + k3·i2 + k4` per pixel. With i1 the original and
+            i2 the blur, k2 = 1+amount and k3 = -amount gives
+            (1+amount)·original − amount·blur — original plus `amount` times
+            the (original − blur) detail signal, in one filter primitive
+            rather than a separate subtract-and-add pass.
+
+            stdDeviation stays at 0.5, the same fast-path ceiling the feather
+            above is held to: a second blur at this radius costs about the
+            same ~27ms it costs there, and going further risks the same
+            compositor cliff that made the feather collapse the scrub to
+            roughly one frame a second at stdDeviation 1.1. 0.6 is a
+            deliberately moderate amount — enough to bring the wordmark and
+            the crest back from the softness of a 1280×720 clip stretched
+            across a much larger box, short of the halo a heavier pass would
+            ring around every letter.
+          */}
+          <feGaussianBlur in="SourceGraphic" stdDeviation="0.5" result="colorBlur" />
+          <feComposite
+            in="SourceGraphic"
+            in2="colorBlur"
+            operator="arithmetic"
+            k1="0"
+            k2="1.6"
+            k3="-0.6"
+            k4="0"
+            result="sharpened"
+          />
+
+          {/*
+            The white fringe, and why it existed: everything above only ever
+            rewrote *alpha*. At the feathered edge the underlying pixel is
+            genuinely a blend of dark garment and light cyclorama — real
+            antialiasing in the source footage, not a bug — and a plain
+            `feComposite operator="in"` here would carry that blended colour
+            through unchanged, just at partial opacity. A half-transparent
+            pixel whose *colour* is still light-grey reads, composited onto
+            this page's near-black, as a pale rim around the whole silhouette.
+
+            The fix is the same one `scripts/extract-cutouts.mjs` uses for the
+            static cutouts — decontaminate the edge colour rather than only
+            gating its opacity — done here as alpha premultiplication instead
+            of that script's per-row background solve, because a solve needs a
+            known background sample and nothing in a filter graph can measure
+            one.
+
+            This pass makes that premultiply quadratic rather than linear —
+            colour falls off by alpha *squared*, not alpha — because linear
+            premultiply alone still leaves a visible pixel wherever the source
+            colour was badly contaminated: at alpha 0.5 a pixel blended
+            halfway to the cyclorama (say, mid-grey) was still cut only in
+            half, and half of mid-grey reads as a dim grey ring, not black.
+            Squaring the falloff cuts that same pixel to a quarter, and it
+            keeps compounding faster than alpha itself does everywhere alpha
+            is below 1 — which is exactly the transition zone this exists to
+            clean up, and nowhere else, since at alpha 1 (the solid interior)
+            alpha² and alpha are identical and the real, untouched texture
+            still comes through.
+
+            Getting there without corrupting *alpha itself* — final alpha has
+            to stay exactly the matte's, or the silhouette's actual coverage
+            erodes, which is a shape change wearing a colour fix's clothes —
+            needs two multiplies where a naive squaring would use one.
+            `alphaOpaque` copies the matte's alpha into R, G and B *but pins
+            its own alpha channel to a flat 1* (`0 0 0 0 1` on that row: output
+            = 0×input + 1, ignoring input entirely). Multiplying `sharpened`
+            by that gives a colour darkened by alpha once, still fully opaque
+            — `decontaminated`, alpha 1, not yet the filter's output. Only the
+            *second* multiply, against `matteAsColor` (alpha copied into every
+            channel *including* its own, `0 0 0 1 0`), brings alpha back in:
+            colour ends up scaled by alpha twice (alpha²) while alpha itself
+            is scaled by 1×alpha — the matte's value, untouched, because the
+            first multiply never touched it.
+          */}
+          <feColorMatrix
+            in="matte"
+            type="matrix"
+            values="0 0 0 1 0
+                    0 0 0 1 0
+                    0 0 0 1 0
+                    0 0 0 0 1"
+            result="alphaOpaque"
+          />
+          <feComposite
+            in="sharpened"
+            in2="alphaOpaque"
+            operator="arithmetic"
+            k1="1"
+            k2="0"
+            k3="0"
+            k4="0"
+            result="decontaminated"
+          />
+          <feColorMatrix
+            in="matte"
+            type="matrix"
+            values="0 0 0 1 0
+                    0 0 0 1 0
+                    0 0 0 1 0
+                    0 0 0 1 0"
+            result="matteAsColor"
+          />
+          <feComposite
+            in="decontaminated"
+            in2="matteAsColor"
+            operator="arithmetic"
+            k1="1"
+            k2="0"
+            k3="0"
+            k4="0"
+          />
         </filter>
       </defs>
     </svg>
